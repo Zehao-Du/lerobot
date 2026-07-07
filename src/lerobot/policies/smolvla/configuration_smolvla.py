@@ -25,7 +25,7 @@ from ..rtc.configuration_rtc import RTCConfig
 @dataclass
 class SmolVLAConfig(PreTrainedConfig):
     # Input / output structure.
-    n_obs_steps: int = 1
+    n_obs_steps: int = 2
     chunk_size: int = 50
     n_action_steps: int = 50
 
@@ -55,6 +55,12 @@ class SmolVLAConfig(PreTrainedConfig):
     # Converts joint dimensions to relative values with respect to the current state before passing to the model.
     # Gripper dimensions will remain in absolute values.
     use_delta_joint_actions_aloha: bool = False
+
+    # Converts end-effector actions between absolute pose targets and poses relative to the latest observed state.
+    # Assumes the first 6 state/action dimensions are [x, y, z, rx, ry, rz] with rotation vectors.
+    # Gripper dimensions remain absolute.
+    use_relative_ee_actions: bool = False
+    use_relative_ee_states: bool = False
 
     # Tokenizer
     tokenizer_max_length: int = 48

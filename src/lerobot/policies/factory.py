@@ -349,6 +349,10 @@ def make_pre_post_processors(
                 preprocessor,
                 postprocessor,
             )
+        if isinstance(policy_cfg, SmolVLAConfig):
+            from .smolvla.processor_smolvla import ensure_smolvla_relative_ee_processors
+
+            ensure_smolvla_relative_ee_processors(preprocessor, postprocessor, policy_cfg)
         return preprocessor, postprocessor
 
     # Create a new processor based on policy type

@@ -171,6 +171,7 @@ class PreTrainedConfig(draccus.ChoiceRegistry, HubMixin, abc.ABC):  # type: igno
         cls: builtins.type[T],
         pretrained_name_or_path: str | Path,
         *,
+        config_name: str = CONFIG_NAME,
         force_download: bool = False,
         resume_download: bool | None = None,
         proxies: dict[Any, Any] | None = None,
@@ -183,15 +184,15 @@ class PreTrainedConfig(draccus.ChoiceRegistry, HubMixin, abc.ABC):  # type: igno
         model_id = str(pretrained_name_or_path)
         config_file: str | None = None
         if Path(model_id).is_dir():
-            if CONFIG_NAME in os.listdir(model_id):
-                config_file = os.path.join(model_id, CONFIG_NAME)
+            if config_name in os.listdir(model_id):
+                config_file = os.path.join(model_id, config_name)
             else:
-                logger.error(f"{CONFIG_NAME} not found in {Path(model_id).resolve()}")
+                logger.error(f"{config_name} not found in {Path(model_id).resolve()}")
         else:
             try:
                 config_file = hf_hub_download(
                     repo_id=model_id,
-                    filename=CONFIG_NAME,
+                    filename=config_name,
                     revision=revision,
                     cache_dir=cache_dir,
                     force_download=force_download,
@@ -202,7 +203,7 @@ class PreTrainedConfig(draccus.ChoiceRegistry, HubMixin, abc.ABC):  # type: igno
                 )
             except HfHubHTTPError as e:
                 raise FileNotFoundError(
-                    f"{CONFIG_NAME} not found on the HuggingFace Hub in {model_id}"
+                    f"{config_name} not found on the HuggingFace Hub in {model_id}"
                 ) from e
 
         # HACK: Parse the original config to get the config subclass, so that we can
@@ -213,7 +214,7 @@ class PreTrainedConfig(draccus.ChoiceRegistry, HubMixin, abc.ABC):  # type: igno
             orig_config = draccus.parse(cls, config_file, args=[])
 
         if config_file is None:
-            raise FileNotFoundError(f"{CONFIG_NAME} not found in {model_id}")
+            raise FileNotFoundError(f"{config_name} not found in {model_id}")
 
         with open(config_file) as f:
             config = json.load(f)

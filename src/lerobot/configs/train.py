@@ -166,7 +166,11 @@ class TrainPipelineConfig(HubMixin):
             self.reward_model.pretrained_path = str(Path(reward_model_path))
         elif policy_path:
             overrides = parser.get_yaml_overrides("policy") + (parser.get_cli_overrides("policy") or [])
-            self.policy = PreTrainedConfig.from_pretrained(policy_path, cli_overrides=overrides)
+            policy_config_name = parser.parse_arg("policy.config_name")
+            overrides = [arg for arg in overrides if not arg.startswith("--config_name=")]
+            self.policy = PreTrainedConfig.from_pretrained(
+                policy_path, config_name=policy_config_name or "config.json", cli_overrides=overrides
+            )
             self.policy.pretrained_path = Path(policy_path)
         elif self.resume:
             self._resolve_resume_checkpoint()
