@@ -331,6 +331,10 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
             },
             "rename_observations_processor": {"rename_map": cfg.rename_map},
         }
+        if getattr(policy.config, "vlm_model_name", None) is not None:
+            preprocessor_overrides["tokenizer_processor"] = {
+                "tokenizer_name": policy.config.vlm_model_name
+            }
         postprocessor_overrides = {
             "unnormalizer_processor": {
                 "stats": dataset.meta.stats,
