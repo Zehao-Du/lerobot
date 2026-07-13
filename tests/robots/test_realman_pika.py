@@ -258,6 +258,32 @@ def test_progress_gate_does_not_require_gripper_target_after_contact(monkeypatch
     robot.disconnect()
 
 
+def test_progress_gate_can_disable_timeout(monkeypatch, tmp_path):
+    _patch_fakes(monkeypatch)
+    cfg = RealmanPikaConfig(
+        calibration_dir=tmp_path,
+        progress_gate_enabled=True,
+        progress_timeout_enabled=False,
+    )
+    robot = RealmanPika(cfg)
+    robot.connect()
+
+    action = dict.fromkeys(STATE_ACTION_KEYS, 0.0)
+    action["eef_x.pos"] = 0.005
+    action["gripper.pos"] = 0.04
+    robot.send_action(action)
+    robot._active_action_started_at = time.monotonic() - 60.0
+
+    current_obs = dict.fromkeys(STATE_ACTION_KEYS, 0.0)
+    current_obs["gripper.pos"] = 0.04
+    status = robot.get_action_execution_status(current_obs)
+    assert status.active
+    assert not status.reached
+    assert not status.timed_out
+    assert status.timeout_s is None
+    robot.disconnect()
+
+
 def test_pika_waypoints_remain_scheduled_when_commands_arrive_faster_than_latency():
     waypoints = deque(
         [

@@ -147,6 +147,11 @@ timeout, rollout pauses inference, commands the robot to hold its measured pose,
 disables automatic return-to-initial-position, and shuts down. Progress gating
 requires `interpolation_multiplier=1`.
 
+The timeout can be disabled with `--robot.progress_timeout_enabled=false`. This
+keeps waiting for hardware acknowledgement indefinitely if a target is blocked or
+unreachable, so use it only while monitoring the robot and keeping an emergency
+stop available.
+
 With progress gating, `execution_horizon` is measured in acknowledged hardware
 actions, not wall-clock control ticks. Start with a small value such as 2–4; a horizon
 of 10 can represent several seconds when each arm action takes about 500 ms.

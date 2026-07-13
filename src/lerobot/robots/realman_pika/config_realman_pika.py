@@ -112,6 +112,7 @@ class RealmanPikaConfig(RobotConfig):
     # commanded closed width even though the grasp action has completed.
     progress_require_gripper_target: bool = False
     progress_settle_samples: int = 2
+    progress_timeout_enabled: bool = True
     progress_timeout_margin_s: float = 0.3
     progress_min_timeout_s: float = 0.5
 

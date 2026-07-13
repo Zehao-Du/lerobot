@@ -17,6 +17,7 @@ index_or_path: "/dev/video60", width: 640, height: 480, fps: 30}}' \
 --robot.progress_rotation_tolerance_rad=0.02 \
 --robot.progress_require_gripper_target=false \
 --robot.progress_settle_samples=2 \
+--robot.progress_timeout_enabled=false \
 --robot.progress_timeout_margin_s=0.3 \
 --robot.max_relative_pos=0.005 \
 --robot.max_relative_rot=0.01 \

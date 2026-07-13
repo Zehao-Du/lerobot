@@ -89,6 +89,11 @@ class RealmanPika(Robot):
         self._active_action_started_at: float | None = None
         self._active_action_timeout_s: float | None = None
         self._active_action_settle_count = 0
+        if self.config.progress_gate_enabled and not self.config.progress_timeout_enabled:
+            logger.warning(
+                "RealmanPika progress timeout is disabled; rollout will wait indefinitely "
+                "if the robot cannot reach an action target."
+            )
 
     @cached_property
     def _state_features(self) -> dict[str, type]:
@@ -282,9 +287,13 @@ class RealmanPika(Robot):
             assert timeout_s is not None
             self._active_action_target = target_state
             self._active_action_started_at = time.monotonic()
-            self._active_action_timeout_s = max(
-                self.config.progress_min_timeout_s,
-                timeout_s + self.config.progress_timeout_margin_s,
+            self._active_action_timeout_s = (
+                max(
+                    self.config.progress_min_timeout_s,
+                    timeout_s + self.config.progress_timeout_margin_s,
+                )
+                if self.config.progress_timeout_enabled
+                else None
             )
             self._active_action_settle_count = 0
         return {key: float(value) for key, value in zip(STATE_ACTION_KEYS, target, strict=True)}
