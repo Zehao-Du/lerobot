@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
 import logging
 import time
 from functools import cached_property
@@ -24,8 +25,9 @@ import numpy as np
 from lerobot.cameras import make_cameras_from_configs
 from lerobot.types import RobotAction, RobotObservation
 from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
+from lerobot.utils.rotation import Rotation
 
-from ..robot import Robot
+from ..robot import ActionExecutionStatus, Robot
 from .config_realman_pika import RealmanPikaConfig
 from .controllers import PikaController, RealmanInterpolationController
 from .transforms import (
@@ -45,6 +47,14 @@ EEF_RY = "eef_ry.pos"
 EEF_RZ = "eef_rz.pos"
 GRIPPER = "gripper.pos"
 STATE_ACTION_KEYS = (EEF_X, EEF_Y, EEF_Z, EEF_RX, EEF_RY, EEF_RZ, GRIPPER)
+
+
+def _pose_distance(start_pose: np.ndarray, end_pose: np.ndarray) -> tuple[float, float]:
+    position_distance = float(np.linalg.norm(end_pose[:3] - start_pose[:3]))
+    start_rotation = Rotation.from_rotvec(start_pose[3:6])
+    end_rotation = Rotation.from_rotvec(end_pose[3:6])
+    rotation_distance = float(np.linalg.norm((end_rotation * start_rotation.inv()).as_rotvec()))
+    return position_distance, rotation_distance
 
 
 def _as_latest_float(value: Any) -> float:
@@ -75,10 +85,14 @@ class RealmanPika(Robot):
         self.gripper: PikaController | None = None
         self._last_state_vector: np.ndarray | None = None
         self._reference_realman_tcp_pose: np.ndarray | None = None
+        self._active_action_target: np.ndarray | None = None
+        self._active_action_started_at: float | None = None
+        self._active_action_timeout_s: float | None = None
+        self._active_action_settle_count = 0
 
     @cached_property
     def _state_features(self) -> dict[str, type]:
-        return {key: float for key in STATE_ACTION_KEYS}
+        return dict.fromkeys(STATE_ACTION_KEYS, float)
 
     @cached_property
     def _camera_features(self) -> dict[str, tuple[int, int, int]]:
@@ -186,6 +200,17 @@ class RealmanPika(Robot):
         self._last_state_vector = state
         return state
 
+    def _state_vector_from_realman_pose(
+        self, realman_tcp_pose: np.ndarray, gripper_width: float
+    ) -> np.ndarray:
+        if self._reference_realman_tcp_pose is None:
+            raise RuntimeError("RealmanPika reference TCP pose is not initialized.")
+        realman_relative_pose = realman_tcp_relative_pose_between(
+            self._reference_realman_tcp_pose, realman_tcp_pose
+        )
+        pika_relative_pose = realman_tcp_relative_pose_to_pika_relative_pose(realman_relative_pose)
+        return np.concatenate([pika_relative_pose, np.array([gripper_width], dtype=np.float64)])
+
     @check_if_not_connected
     def get_observation(self) -> RobotObservation:
         state = self._read_state_vector()
@@ -224,31 +249,124 @@ class RealmanPika(Robot):
         realman_relative_pose = pika_relative_pose_to_realman_tcp_relative_pose(target[:6])
         realman_target_pose = apply_realman_tcp_relative_pose(current_realman_tcp_pose, realman_relative_pose)
 
+        current_state = None
+        target_state = None
+        timeout_s = None
+        if self.config.progress_gate_enabled:
+            current_gripper_width = self._read_gripper_width()
+            current_state = self._state_vector_from_realman_pose(
+                current_realman_tcp_pose, current_gripper_width
+            )
+            target_state = self._state_vector_from_realman_pose(realman_target_pose, target[6])
+            pos_distance, rot_distance = _pose_distance(current_state[:6], target_state[:6])
+            gripper_distance = abs(float(target_state[6] - current_state[6]))
+            arm_duration = max(
+                pos_distance / self.config.max_pos_speed,
+                rot_distance / self.config.max_rot_speed,
+            )
+            gripper_speed_m_s = self.config.gripper_move_max_speed_mm_s / 1000.0
+            gripper_duration = gripper_distance / gripper_speed_m_s
+            timeout_s = max(
+                arm_duration + float(self.config.robot_action_latency),
+                gripper_duration + float(self.config.gripper_action_latency),
+            )
+
         now = time.time()
         self.arm.schedule_waypoint(
             realman_target_pose, target_time=now + float(self.config.robot_action_latency)
         )
         self.gripper.schedule_waypoint(target[6], target_time=now + float(self.config.gripper_action_latency))
 
-        self._last_state_vector = target
+        if self.config.progress_gate_enabled:
+            assert target_state is not None
+            assert timeout_s is not None
+            self._active_action_target = target_state
+            self._active_action_started_at = time.monotonic()
+            self._active_action_timeout_s = max(
+                self.config.progress_min_timeout_s,
+                timeout_s + self.config.progress_timeout_margin_s,
+            )
+            self._active_action_settle_count = 0
         return {key: float(value) for key, value in zip(STATE_ACTION_KEYS, target, strict=True)}
+
+    @property
+    def requires_action_acknowledgement(self) -> bool:
+        return self.config.progress_gate_enabled
+
+    def get_action_execution_status(
+        self, observation: RobotObservation | None = None
+    ) -> ActionExecutionStatus:
+        target = self._active_action_target
+        started_at = self._active_action_started_at
+        timeout_s = self._active_action_timeout_s
+        if not self.config.progress_gate_enabled or target is None or started_at is None:
+            return ActionExecutionStatus(active=False)
+
+        if observation is None:
+            current = self._read_state_vector()
+        else:
+            missing = [key for key in STATE_ACTION_KEYS if key not in observation]
+            if missing:
+                raise ValueError(f"Missing RealmanPika progress observation keys: {missing}.")
+            current = np.array(
+                [_as_latest_float(observation[key]) for key in STATE_ACTION_KEYS],
+                dtype=np.float64,
+            )
+
+        position_error, rotation_error = _pose_distance(current[:6], target[:6])
+        gripper_error = abs(float(current[6] - target[6]))
+        within_tolerance = (
+            position_error <= self.config.progress_position_tolerance_m
+            and rotation_error <= self.config.progress_rotation_tolerance_rad
+            and (
+                not self.config.progress_require_gripper_target
+                or gripper_error <= self.config.progress_gripper_tolerance_m
+            )
+        )
+        self._active_action_settle_count = self._active_action_settle_count + 1 if within_tolerance else 0
+        reached = self._active_action_settle_count >= self.config.progress_settle_samples
+        elapsed_s = time.monotonic() - started_at
+        timed_out = not reached and timeout_s is not None and elapsed_s >= timeout_s
+        return ActionExecutionStatus(
+            active=True,
+            reached=reached,
+            timed_out=timed_out,
+            elapsed_s=elapsed_s,
+            timeout_s=timeout_s,
+            position_error=position_error,
+            rotation_error=rotation_error,
+            gripper_error=gripper_error,
+        )
+
+    def acknowledge_action_execution(self) -> None:
+        self._active_action_target = None
+        self._active_action_started_at = None
+        self._active_action_timeout_s = None
+        self._active_action_settle_count = 0
+
+    @check_if_not_connected
+    def hold_position(self) -> None:
+        if self.arm is None or self.gripper is None:
+            raise RuntimeError("RealmanPika is not connected.")
+        current_pose = self._read_realman_tcp_pose()
+        current_gripper_width = self._read_gripper_width()
+        self.arm.servol(current_pose, duration=0.0)
+        self.gripper.schedule_waypoint(current_gripper_width, target_time=time.time())
+        self.acknowledge_action_execution()
 
     def _disconnect_best_effort(self) -> None:
         for controller in (self.gripper, self.arm):
             if controller is not None:
-                try:
+                with contextlib.suppress(Exception):
                     controller.stop(wait=True)
-                except Exception:  # nosec B110
-                    pass
         for cam in self.cameras.values():
-            try:
+            with contextlib.suppress(Exception):
                 if cam.is_connected:
                     cam.disconnect()
-            except Exception:  # nosec B110
-                pass
         self.arm = None
         self.gripper = None
         self._reference_realman_tcp_pose = None
+        self.acknowledge_action_execution()
 
     @check_if_not_connected
     def disconnect(self) -> None:

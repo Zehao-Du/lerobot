@@ -14,6 +14,7 @@
 
 import abc
 import builtins
+from dataclasses import dataclass
 from pathlib import Path
 
 import draccus
@@ -23,6 +24,20 @@ from lerobot.types import RobotAction, RobotObservation
 from lerobot.utils.constants import HF_LEROBOT_CALIBRATION, ROBOTS
 
 from .config import RobotConfig
+
+
+@dataclass(frozen=True)
+class ActionExecutionStatus:
+    """Non-blocking status for a robot action that requires hardware acknowledgement."""
+
+    active: bool
+    reached: bool = False
+    timed_out: bool = False
+    elapsed_s: float = 0.0
+    timeout_s: float | None = None
+    position_error: float | None = None
+    rotation_error: float | None = None
+    gripper_error: float | None = None
 
 
 # TODO(aliberts): action/obs typing such as Generic[ObsType, ActType] similar to gym.Env ?
@@ -204,6 +219,26 @@ class Robot(abc.ABC):
                 safety limits on velocity.
         """
         pass
+
+    @property
+    def requires_action_acknowledgement(self) -> bool:
+        """Whether rollout must wait for hardware completion before advancing actions."""
+        return False
+
+    def get_action_execution_status(
+        self, observation: RobotObservation | None = None
+    ) -> ActionExecutionStatus:
+        """Return progress for the active action without blocking."""
+        del observation
+        return ActionExecutionStatus(active=False)
+
+    def acknowledge_action_execution(self) -> None:
+        """Clear tracking for a completed action."""
+        return None
+
+    def hold_position(self) -> None:
+        """Stop trajectory advancement at the current measured position."""
+        raise NotImplementedError(f"{type(self).__name__} does not implement hold_position().")
 
     @abc.abstractmethod
     def disconnect(self) -> None:

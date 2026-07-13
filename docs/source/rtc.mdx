@@ -111,6 +111,46 @@ RTCConfig(execution_horizon=10)
 
 **`inference_delay`**: How many timesteps of inference latency your system has. This is passed to `predict_action_chunk()` rather than the config, since it may vary at runtime.
 
+## Hardware-progress gating for slow robots
+
+RTC normally advances one action for every rollout control tick. For a speed-limited
+RealMan arm, an action can take much longer than one tick to finish. Enable hardware
+progress gating to keep observation and safety checks at the configured FPS while
+advancing the RTC action queue only after the arm and gripper reach their targets:
+
+```bash
+lerobot-rollout \
+    --inference.type=rtc \
+    --inference.progress_replan_interval=1 \
+    --robot.type=realman_pika \
+    --robot.progress_gate_enabled=true \
+    --robot.progress_position_tolerance_m=0.0005 \
+    --robot.progress_rotation_tolerance_rad=0.02 \
+    --robot.progress_gripper_tolerance_m=0.001 \
+    --robot.progress_require_gripper_target=false \
+    --robot.progress_settle_samples=2
+```
+
+Each relative action is converted to an absolute target and sent exactly once. The
+rollout loop continues reading observations, but the next policy action is not
+dispatched until the current target stays within tolerance for the configured number
+of samples. RTC uses the number of hardware-acknowledged actions during inference,
+rather than wall-clock FPS, to align and merge the next chunk.
+
+`progress_require_gripper_target` defaults to `false` because a successful grasp can
+physically prevent the gripper from reaching its commanded fully closed width. Enable
+it only when exact free-space gripper positioning is required.
+
+The action timeout is derived from target distance and the configured arm/gripper
+speed limits, with `progress_timeout_margin_s` added for controller overhead. On
+timeout, rollout pauses inference, commands the robot to hold its measured pose,
+disables automatic return-to-initial-position, and shuts down. Progress gating
+requires `interpolation_multiplier=1`.
+
+With progress gating, `execution_horizon` is measured in acknowledged hardware
+actions, not wall-clock control ticks. Start with a small value such as 2–4; a horizon
+of 10 can represent several seconds when each arm action takes about 500 ms.
+
 ## Testing RTC Offline
 
 Before running on a real robot, test RTC with dataset samples to visualize how it works:

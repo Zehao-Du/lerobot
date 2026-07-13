@@ -29,7 +29,7 @@ from lerobot.robots.config import RobotConfig
 from lerobot.teleoperators.config import TeleoperatorConfig
 from lerobot.utils.device_utils import auto_select_torch_device, is_torch_device_available
 
-from .inference import InferenceEngineConfig, SyncInferenceConfig
+from .inference import InferenceEngineConfig, RTCInferenceConfig, SyncInferenceConfig
 
 logger = logging.getLogger(__name__)
 
@@ -270,6 +270,19 @@ class RolloutConfig:
 
     def __post_init__(self):
         """Validate config invariants and load the policy config from ``--policy.path``."""
+        progress_gate_enabled = bool(
+            self.robot is not None and getattr(self.robot, "progress_gate_enabled", False)
+        )
+        if progress_gate_enabled and not isinstance(self.inference, RTCInferenceConfig):
+            raise ValueError("Robot hardware progress gating requires --inference.type=rtc.")
+        if progress_gate_enabled and not isinstance(self.strategy, BaseStrategyConfig):
+            raise ValueError("Robot hardware progress gating currently supports --strategy.type=base only.")
+        if progress_gate_enabled and self.interpolation_multiplier != 1:
+            raise ValueError(
+                "Robot hardware progress gating requires --interpolation_multiplier=1 "
+                "because each policy action must have exactly one hardware acknowledgement."
+            )
+
         # --- Strategy-specific validation ---
         if isinstance(self.strategy, DAggerStrategyConfig) and self.teleop is None:
             raise ValueError("DAgger strategy requires --teleop.type to be set")

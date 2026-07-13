@@ -105,6 +105,7 @@ class RTCInferenceEngine(InferenceEngine):
         use_torch_compile: bool = False,
         compile_warmup_inferences: int = 2,
         rtc_queue_threshold: int = 30,
+        progress_replan_interval: int = 1,
         shutdown_event: Event | None = None,
         visual_prompt_recolorer: Sam3PinkBlockRecolorer | None = None,
     ) -> None:
@@ -120,7 +121,9 @@ class RTCInferenceEngine(InferenceEngine):
         self._use_torch_compile = use_torch_compile
         self._compile_warmup_inferences = compile_warmup_inferences
         self._rtc_queue_threshold = rtc_queue_threshold
+        self._progress_replan_interval = progress_replan_interval
         self._visual_prompt_recolorer = visual_prompt_recolorer
+        self._hardware_progress_gate = robot_wrapper.requires_action_acknowledgement
 
         self._action_queue: ActionQueue | None = None
         self._obs_holder: dict[str, Any] = {}
@@ -131,6 +134,10 @@ class RTCInferenceEngine(InferenceEngine):
         self._rtc_error = Event()
         self._global_shutdown_event = shutdown_event
         self._rtc_thread: Thread | None = None
+        self._dispatch_lock = Lock()
+        self._action_dispatched = False
+        self._last_inference_completed_count = 0
+        self._last_progress_inference_delay = 0
 
         if not self._use_torch_compile:
             self._compile_warmup_done.set()
@@ -139,6 +146,11 @@ class RTCInferenceEngine(InferenceEngine):
             logger.info(
                 "RTCInferenceEngine initialized (torch.compile enabled, %d warmup inferences)",
                 compile_warmup_inferences,
+            )
+        if self._hardware_progress_gate:
+            logger.info(
+                "Hardware-progress RTC enabled (replan every %d acknowledged action(s))",
+                progress_replan_interval,
             )
 
         # Processor introspection for relative-action re-anchoring.
@@ -188,6 +200,10 @@ class RTCInferenceEngine(InferenceEngine):
             "robot_type": self._robot.robot_type,
         }
         self._shutdown_event.clear()
+        with self._dispatch_lock:
+            self._action_dispatched = False
+        self._last_inference_completed_count = 0
+        self._last_progress_inference_delay = 0
         self._rtc_thread = Thread(
             target=self._rtc_loop,
             daemon=True,
@@ -227,16 +243,48 @@ class RTCInferenceEngine(InferenceEngine):
         self._postprocessor.reset()
         if self._action_queue is not None:
             self._action_queue.clear()
+        with self._dispatch_lock:
+            self._action_dispatched = False
+        self._last_inference_completed_count = 0
+        self._last_progress_inference_delay = 0
+        if self._hardware_progress_gate:
+            status = self._robot.get_action_execution_status()
+            if status.active:
+                self._robot.hold_position()
+            else:
+                self._robot.acknowledge_action_execution()
 
     # ------------------------------------------------------------------
     # Action production (called from main thread)
     # ------------------------------------------------------------------
 
     def get_action(self, obs_frame: dict | None) -> torch.Tensor | None:
-        """Pop the next action from the RTC queue (ignores ``obs_frame``)."""
+        """Return the next RTC action, reserving it until hardware acknowledgement when gated."""
         if self._action_queue is None:
             return None
-        return self._action_queue.get()
+        if not self._hardware_progress_gate:
+            return self._action_queue.get()
+        with self._dispatch_lock:
+            if self._action_dispatched:
+                return None
+            action = self._action_queue.peek()
+            if action is not None:
+                self._action_dispatched = True
+            return action
+
+    def acknowledge_action(self) -> None:
+        """Advance a hardware-gated queue after the robot reaches its latched target."""
+        if not self._hardware_progress_gate:
+            return
+        queue = self._action_queue
+        if queue is None:
+            raise RuntimeError("Cannot acknowledge an RTC action before the queue is initialized.")
+        with self._dispatch_lock:
+            if not self._action_dispatched:
+                raise RuntimeError("Cannot acknowledge an RTC action that was not dispatched.")
+            if not queue.acknowledge():
+                raise RuntimeError("Cannot acknowledge an empty RTC action queue.")
+            self._action_dispatched = False
 
     def notify_observation(self, obs: dict) -> None:
         """Publish the latest observation for the RTC thread to consume."""
@@ -272,14 +320,33 @@ class RTCInferenceEngine(InferenceEngine):
                     time.sleep(_RTC_IDLE_SLEEP_S)
                     continue
 
-                if queue.qsize() <= self._rtc_queue_threshold:
+                completed_count, _ = queue.get_progress_snapshot()
+                if self._use_torch_compile and not self._compile_warmup_done.is_set():
+                    should_infer = True
+                elif self._hardware_progress_gate:
+                    should_infer = queue.empty() or (
+                        completed_count - self._last_inference_completed_count
+                        >= self._progress_replan_interval
+                    )
+                else:
+                    should_infer = queue.qsize() <= self._rtc_queue_threshold
+
+                if should_infer:
                     try:
                         current_time = time.perf_counter()
                         idx_before = queue.get_action_index()
+                        completed_before, inference_epoch = queue.get_progress_snapshot()
                         prev_actions = queue.get_left_over()
 
-                        latency = latency_tracker.max()
-                        delay = math.ceil(latency / time_per_chunk) if latency else 0
+                        if self._hardware_progress_gate:
+                            with self._dispatch_lock:
+                                delay = max(
+                                    int(self._action_dispatched),
+                                    self._last_progress_inference_delay,
+                                )
+                        else:
+                            latency = latency_tracker.max()
+                            delay = math.ceil(latency / time_per_chunk) if latency else 0
 
                         obs_batch = build_dataset_frame(self._hw_features, obs, prefix="observation")
                         obs_batch = prepare_observation_for_inference(
@@ -316,7 +383,12 @@ class RTCInferenceEngine(InferenceEngine):
                         original = actions.squeeze(0).clone()
                         processed = self._postprocessor(actions).squeeze(0)
                         new_latency = time.perf_counter() - current_time
-                        new_delay = math.ceil(new_latency / time_per_chunk)
+                        if self._hardware_progress_gate:
+                            new_delay = 0
+                            action_index_before_inference = None
+                        else:
+                            new_delay = math.ceil(new_latency / time_per_chunk)
+                            action_index_before_inference = idx_before
 
                         inference_count += 1
                         consecutive_errors = 0
@@ -326,7 +398,23 @@ class RTCInferenceEngine(InferenceEngine):
                         else:
                             latency_tracker.add(new_latency)
 
-                        queue.merge(original, processed, new_delay, idx_before)
+                        merged = queue.merge(
+                            original,
+                            processed,
+                            new_delay,
+                            action_index_before_inference,
+                            expected_epoch=inference_epoch,
+                            completed_count_before_inference=(
+                                completed_before if self._hardware_progress_gate else None
+                            ),
+                        )
+                        if not merged:
+                            continue
+                        if self._hardware_progress_gate:
+                            merged_completed_count = queue.get_completed_count_at_last_merge()
+                            self._last_inference_completed_count = merged_completed_count
+                            new_delay = max(0, merged_completed_count - completed_before)
+                            self._last_progress_inference_delay = new_delay
 
                         if (
                             is_warmup
@@ -336,7 +424,12 @@ class RTCInferenceEngine(InferenceEngine):
                             self._compile_warmup_done.set()
                             logger.info("Compile warmup complete (%d inferences)", inference_count)
 
-                        logger.debug("RTC inference latency=%.2fs, queue=%d", new_latency, queue.qsize())
+                        logger.debug(
+                            "RTC inference latency=%.2fs, delay=%d, queue=%d",
+                            new_latency,
+                            new_delay,
+                            queue.qsize(),
+                        )
 
                     except Exception as e:
                         consecutive_errors += 1

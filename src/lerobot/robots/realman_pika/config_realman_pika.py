@@ -23,7 +23,6 @@ from lerobot.cameras.realsense import RealSenseCameraConfig
 
 from ..config import RobotConfig
 
-
 DEFAULT_REALMAN_IP = "192.168.1.18"
 DEFAULT_REALMAN_PORT = 8080
 DEFAULT_GRIPPER_SERIAL_PORT = "/dev/ttyUSB60"
@@ -103,6 +102,19 @@ class RealmanPikaConfig(RobotConfig):
     robot_action_latency: float | None = None
     gripper_action_latency: float | None = None
 
+    # Hardware-progress gating keeps sensing at rollout FPS but advances the
+    # policy action queue only after the arm and gripper reach their targets.
+    progress_gate_enabled: bool = False
+    progress_position_tolerance_m: float = 0.0005
+    progress_rotation_tolerance_rad: float = 0.02
+    progress_gripper_tolerance_m: float = 0.001
+    # Keep False for grasping: contact can prevent the gripper from reaching a
+    # commanded closed width even though the grasp action has completed.
+    progress_require_gripper_target: bool = False
+    progress_settle_samples: int = 2
+    progress_timeout_margin_s: float = 0.3
+    progress_min_timeout_s: float = 0.5
+
     cameras: dict[str, CameraConfig] = field(default_factory=default_realman_pika_cameras)
     disable_cameras_on_connect: bool = False
 
@@ -125,6 +137,28 @@ class RealmanPikaConfig(RobotConfig):
             raise ValueError(f"max_relative_pos must be > 0, got {self.max_relative_pos}.")
         if self.max_relative_rot <= 0:
             raise ValueError(f"max_relative_rot must be > 0, got {self.max_relative_rot}.")
+        if self.gripper_move_max_speed_mm_s <= 0:
+            raise ValueError(
+                f"gripper_move_max_speed_mm_s must be > 0, got {self.gripper_move_max_speed_mm_s}."
+            )
+        if self.progress_position_tolerance_m <= 0:
+            raise ValueError(
+                f"progress_position_tolerance_m must be > 0, got {self.progress_position_tolerance_m}."
+            )
+        if self.progress_rotation_tolerance_rad <= 0:
+            raise ValueError(
+                f"progress_rotation_tolerance_rad must be > 0, got {self.progress_rotation_tolerance_rad}."
+            )
+        if self.progress_gripper_tolerance_m <= 0:
+            raise ValueError(
+                f"progress_gripper_tolerance_m must be > 0, got {self.progress_gripper_tolerance_m}."
+            )
+        if self.progress_settle_samples <= 0:
+            raise ValueError(f"progress_settle_samples must be > 0, got {self.progress_settle_samples}.")
+        if self.progress_timeout_margin_s < 0:
+            raise ValueError(f"progress_timeout_margin_s must be >= 0, got {self.progress_timeout_margin_s}.")
+        if self.progress_min_timeout_s <= 0:
+            raise ValueError(f"progress_min_timeout_s must be > 0, got {self.progress_min_timeout_s}.")
         if self.robot_action_latency is None:
             self.robot_action_latency = self.action_latency
         if self.gripper_action_latency is None:

@@ -19,7 +19,7 @@ from __future__ import annotations
 from threading import Lock
 from typing import Any
 
-from lerobot.robots import Robot
+from lerobot.robots import ActionExecutionStatus, Robot
 
 
 class ThreadSafeRobot:
@@ -47,6 +47,18 @@ class ThreadSafeRobot:
         with self._lock:
             return self._robot.send_action(action)
 
+    def get_action_execution_status(self, observation: dict[str, Any] | None = None) -> ActionExecutionStatus:
+        with self._lock:
+            return self._robot.get_action_execution_status(observation)
+
+    def acknowledge_action_execution(self) -> None:
+        with self._lock:
+            self._robot.acknowledge_action_execution()
+
+    def hold_position(self) -> None:
+        with self._lock:
+            self._robot.hold_position()
+
     # -- Read-only proxies (no lock needed) -----------------------------------
 
     @property
@@ -72,6 +84,10 @@ class ThreadSafeRobot:
     @property
     def is_connected(self) -> bool:
         return self._robot.is_connected
+
+    @property
+    def requires_action_acknowledgement(self) -> bool:
+        return self._robot.requires_action_acknowledgement
 
     @property
     def inner(self) -> Robot:
