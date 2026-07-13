@@ -1,10 +1,13 @@
 import time
+from collections import deque
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
-from lerobot.robots.realman_pika.config_realman_pika import RealmanPikaConfig
 import lerobot.robots.realman_pika.realman_pika as realman_pika_module
+from lerobot.robots.realman_pika.config_realman_pika import RealmanPikaConfig
+from lerobot.robots.realman_pika.controllers import _pop_latest_due_waypoint
 from lerobot.robots.realman_pika.realman_pika import STATE_ACTION_KEYS, RealmanPika
 from lerobot.robots.realman_pika.transforms import (
     apply_realman_tcp_relative_pose,
@@ -13,6 +16,7 @@ from lerobot.robots.realman_pika.transforms import (
     realman_tcp_relative_pose_to_pika_relative_pose,
     realman_tcp_pose_to_pika_gripper_pose,
 )
+from lerobot.scripts import lerobot_realman_pika_test as hardware_test_module
 
 
 class FakeCamera:
@@ -154,6 +158,121 @@ def test_send_action_clips_and_schedules(monkeypatch, tmp_path):
     assert before + cfg.action_latency <= gripper.scheduled[0][1] <= after + cfg.action_latency
 
     robot.disconnect()
+
+
+def test_pika_waypoints_remain_scheduled_when_commands_arrive_faster_than_latency():
+    waypoints = deque(
+        [
+            (0.100, 50.0),
+            (0.133, 40.0),
+            (0.166, 30.0),
+            (0.200, 20.0),
+        ]
+    )
+
+    assert _pop_latest_due_waypoint(waypoints, 0.099) is None
+    assert _pop_latest_due_waypoint(waypoints, 0.100) == 50.0
+    assert _pop_latest_due_waypoint(waypoints, 0.150) == 40.0
+    assert _pop_latest_due_waypoint(waypoints, 0.199) == 30.0
+    assert _pop_latest_due_waypoint(waypoints, 0.200) == 20.0
+    assert not waypoints
+
+
+def test_pika_waypoints_skip_stale_targets_but_preserve_future_target():
+    waypoints = deque([(0.100, 50.0), (0.133, 40.0), (0.166, 30.0)])
+
+    assert _pop_latest_due_waypoint(waypoints, 0.150) == 40.0
+    assert list(waypoints) == [(0.166, 30.0)]
+
+
+def test_latency_measurement_uses_feedback_timestamps(monkeypatch):
+    class FakeClock:
+        wall_time = 100.0
+        monotonic_time = 0.0
+
+        def time(self):
+            return self.wall_time
+
+        def monotonic(self):
+            return self.monotonic_time
+
+        def sleep(self, duration):
+            self.wall_time += duration
+            self.monotonic_time += duration
+
+    clock = FakeClock()
+    monkeypatch.setattr(hardware_test_module.time, "time", clock.time)
+    monkeypatch.setattr(hardware_test_module.time, "monotonic", clock.monotonic)
+    monkeypatch.setattr(hardware_test_module.time, "sleep", clock.sleep)
+
+    samples = iter(
+        [
+            (np.array([0.0]), 99.99),
+            (np.array([0.0]), 100.05),
+            (np.array([0.3]), 100.12),
+            (np.array([0.95]), 100.15),
+            (np.array([0.98]), 100.16),
+        ]
+    )
+    scheduled_times = []
+    result = hardware_test_module._measure_step_latency(
+        read_sample=lambda: next(samples),
+        schedule=scheduled_times.append,
+        target=np.array([1.0]),
+        schedule_delay_s=0.1,
+        onset_threshold=0.2,
+        target_tolerance=0.1,
+        timeout_s=1.0,
+        poll_interval_s=0.01,
+    )
+
+    assert scheduled_times == [100.1]
+    assert result.onset_from_submit_s == pytest.approx(0.12)
+    assert result.onset_from_target_time_s == pytest.approx(0.02)
+    assert result.reached_from_submit_s == pytest.approx(0.16)
+    assert result.reached_from_target_time_s == pytest.approx(0.06)
+
+
+def test_arm_latency_probe_uses_immediate_servol(monkeypatch):
+    class FakeArm:
+        def __init__(self):
+            self.calls = []
+
+        def get_state(self):
+            return {
+                "ActualTCPPose": np.zeros(6),
+                "robot_receive_timestamp": 1.0,
+            }
+
+        def servol(self, pose, duration):
+            self.calls.append((np.asarray(pose), duration))
+
+    delays = []
+
+    def fake_measure_step_latency(**kwargs):
+        delays.append(kwargs["schedule_delay_s"])
+        kwargs["schedule"](123.0)
+        return hardware_test_module.StepLatencyResult(0.01, 0.01, 0.05, 0.05)
+
+    monkeypatch.setattr(hardware_test_module, "_measure_step_latency", fake_measure_step_latency)
+    arm = FakeArm()
+    args = SimpleNamespace(
+        latency_trials=1,
+        latency_arm_step_mm=5.0,
+        latency_arm_onset_mm=0.2,
+        latency_arm_tolerance_mm=0.5,
+        latency_timeout=1.0,
+        robot_command_frequency=125,
+        latency_rest=0.0,
+    )
+
+    hardware_test_module._run_arm_latency_test(arm, args)
+
+    assert delays == [0.0, 0.0]
+    assert len(arm.calls) == 2
+    assert all(duration == 0.0 for _, duration in arm.calls)
+    assert arm.calls[0][0][0] == pytest.approx(0.005)
+    assert arm.calls[1][0][0] == pytest.approx(0.0)
 
 
 def test_realman_trajectory_interpolator_matches_umi_schedule_semantics():

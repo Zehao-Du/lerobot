@@ -67,6 +67,16 @@ def _check_vector(name: str, value: Any, shape: tuple[int, ...]) -> np.ndarray:
     return value
 
 
+def _pop_latest_due_waypoint(
+    waypoints: deque[tuple[float, float]], current_time: float
+) -> float | None:
+    """Return the newest due position while preserving future waypoints."""
+    due_position = None
+    while waypoints and waypoints[0][0] <= current_time:
+        _, due_position = waypoints.popleft()
+    return due_position
+
+
 def _infer_local_ip_for_target(target_ip: str) -> str:
     sock = None
     try:
@@ -713,8 +723,7 @@ class PikaController(mp.Process, _LatestStateMixin):
             curr_pos = float(gripper.get_gripper_distance())
             prev_pos = curr_pos
             prev_time = time.time()
-            pending_pos = None
-            pending_time = None
+            pending_waypoints: deque[tuple[float, float]] = deque()
             t_start = time.monotonic()
             iter_idx = 0
             keep_running = True
@@ -731,13 +740,15 @@ class PikaController(mp.Process, _LatestStateMixin):
                         keep_running = False
                         break
                     if command["cmd"] == PikaCommand.SCHEDULE_WAYPOINT.value:
-                        pending_pos = float(np.clip(command["target_pos"] * self.scale, self.min_width, self.max_width))
-                        pending_time = time.monotonic() - time.time() + float(command["target_time"])
+                        target_pos = float(
+                            np.clip(command["target_pos"] * self.scale, self.min_width, self.max_width)
+                        )
+                        target_time = time.monotonic() - time.time() + float(command["target_time"])
+                        pending_waypoints.append((target_time, target_pos))
 
-                if pending_pos is not None and pending_time is not None and t_now >= pending_time:
-                    gripper.set_gripper_distance(pending_pos)
-                    pending_pos = None
-                    pending_time = None
+                due_position = _pop_latest_due_waypoint(pending_waypoints, t_now)
+                if due_position is not None and not gripper.set_gripper_distance(due_position):
+                    logger.error("Pika gripper rejected target distance %.3f mm.", due_position)
 
                 receive_time = time.time()
                 curr_pos = float(gripper.get_gripper_distance())
