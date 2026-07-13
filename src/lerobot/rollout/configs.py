@@ -244,6 +244,9 @@ class RolloutConfig:
     # When True, block before every policy action and wait for terminal confirmation.
     # Enter/y sends the action, n/s skips it, q requests rollout shutdown.
     confirm_each_action: bool = False
+    # Print the action returned by robot.send_action(), grouped and colorized by
+    # position, rotation, and gripper components.
+    log_controller_actions: bool = False
     # When True, recolor the pink block to blue in rgb/fisheye frames before policy inference.
     visual_prompt: bool = False
     visual_prompt_checkpoint: Path = Path("/home/ubuntu/Documents/CodeField/zehao/lerobot/outputs/sam3")

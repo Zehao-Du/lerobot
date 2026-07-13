@@ -17,8 +17,8 @@
 from __future__ import annotations
 
 import dataclasses
-from types import SimpleNamespace
 from threading import Event
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -275,10 +275,13 @@ class _FakeRobotWrapper:
         return action
 
 
-def _make_send_action_ctx(confirm_each_action: bool):
+def _make_send_action_ctx(confirm_each_action: bool, log_controller_actions: bool = False):
     return SimpleNamespace(
         runtime=SimpleNamespace(
-            cfg=SimpleNamespace(confirm_each_action=confirm_each_action),
+            cfg=SimpleNamespace(
+                confirm_each_action=confirm_each_action,
+                log_controller_actions=log_controller_actions,
+            ),
             shutdown_event=Event(),
         ),
         policy=SimpleNamespace(inference=_FakeInference()),
@@ -366,6 +369,35 @@ def test_realman_pika_action_confirmation_prints_offset_debug(capsys, monkeypatc
     assert "robot_realman_tcp_relative" in output
     assert "pika_absolute" not in output
     assert "gripper: 0.0500" in output
+
+
+def test_send_next_action_logs_colorized_controller_action(capsys):
+    from lerobot.rollout.strategies.core import send_next_action
+    from lerobot.utils.action_interpolator import ActionInterpolator
+
+    action = {
+        "eef_x.pos": 0.11,
+        "eef_y.pos": 0.18,
+        "eef_z.pos": 0.03,
+        "eef_rx.pos": 0.01,
+        "eef_ry.pos": -0.02,
+        "eef_rz.pos": 0.03,
+        "gripper.pos": 0.05,
+    }
+    ctx = _make_send_action_ctx(confirm_each_action=False, log_controller_actions=True)
+    ctx.policy.inference.action = torch.tensor(list(action.values()), dtype=torch.float32)
+    ctx.data.ordered_action_keys = list(action)
+
+    assert send_next_action({}, {}, ctx, ActionInterpolator()) == pytest.approx(action)
+
+    output = capsys.readouterr().out
+    assert "[ActionDebug:controller]" in output
+    assert "[sent]" in output
+    assert "\033[92mpos:" in output
+    assert "\033[96mrot:" in output
+    assert "\033[93mgripper:" in output
+    assert len(ctx.hardware.robot_wrapper.sent) == 1
+    assert ctx.hardware.robot_wrapper.sent[0] == pytest.approx(action)
 
 
 # ---------------------------------------------------------------------------

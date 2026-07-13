@@ -1,0 +1,1580 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>LeRobot RTC 执行过程详解</title>
+  <style>
+    :root {
+      --bg: #f4f7fb;
+      --panel: #ffffff;
+      --panel-soft: #f8fafc;
+      --text: #172033;
+      --muted: #5d687b;
+      --line: #dbe2ec;
+      --primary: #2563eb;
+      --primary-soft: #e8f0ff;
+      --cyan: #0891b2;
+      --cyan-soft: #e5f8fc;
+      --green: #15803d;
+      --green-soft: #e9f8ee;
+      --orange: #c35a0a;
+      --orange-soft: #fff1e6;
+      --red: #c53030;
+      --red-soft: #fff0f0;
+      --purple: #7c3aed;
+      --purple-soft: #f2ebff;
+      --code-bg: #101827;
+      --code-text: #e5edf9;
+      --shadow: 0 14px 38px rgba(20, 35, 60, 0.08);
+      --radius: 16px;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0d1420;
+        --panel: #151e2d;
+        --panel-soft: #111a28;
+        --text: #e9eef7;
+        --muted: #aab6c8;
+        --line: #2b384a;
+        --primary: #74a4ff;
+        --primary-soft: #1b3158;
+        --cyan: #52c7df;
+        --cyan-soft: #153742;
+        --green: #63d489;
+        --green-soft: #153724;
+        --orange: #ffad66;
+        --orange-soft: #42291a;
+        --red: #ff8585;
+        --red-soft: #442020;
+        --purple: #bb9aff;
+        --purple-soft: #30234d;
+        --code-bg: #080d16;
+        --code-text: #e5edf9;
+        --shadow: 0 14px 38px rgba(0, 0, 0, 0.28);
+      }
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      background:
+        radial-gradient(circle at 10% 0%, rgba(37, 99, 235, 0.10), transparent 30rem),
+        radial-gradient(circle at 95% 15%, rgba(8, 145, 178, 0.08), transparent 26rem),
+        var(--bg);
+      color: var(--text);
+      font-family:
+        Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+        "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      line-height: 1.72;
+    }
+
+    a {
+      color: var(--primary);
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    code,
+    pre {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+
+    code {
+      padding: 0.14em 0.38em;
+      border-radius: 6px;
+      background: var(--primary-soft);
+      color: var(--primary);
+      font-size: 0.9em;
+    }
+
+    pre {
+      overflow-x: auto;
+      margin: 1rem 0 0;
+      padding: 1rem 1.15rem;
+      border-radius: 12px;
+      background: var(--code-bg);
+      color: var(--code-text);
+      line-height: 1.58;
+      tab-size: 4;
+    }
+
+    pre code {
+      padding: 0;
+      background: transparent;
+      color: inherit;
+      font-size: 0.88rem;
+    }
+
+    h1,
+    h2,
+    h3 {
+      line-height: 1.25;
+      scroll-margin-top: 1.25rem;
+    }
+
+    h1 {
+      max-width: 900px;
+      margin: 0;
+      font-size: clamp(2.1rem, 5vw, 4.2rem);
+      letter-spacing: -0.04em;
+    }
+
+    h2 {
+      margin: 0 0 1rem;
+      font-size: clamp(1.55rem, 3vw, 2.2rem);
+      letter-spacing: -0.02em;
+    }
+
+    h3 {
+      margin: 1.5rem 0 0.6rem;
+      font-size: 1.18rem;
+    }
+
+    p {
+      margin: 0.65rem 0;
+    }
+
+    ul,
+    ol {
+      padding-left: 1.4rem;
+    }
+
+    li + li {
+      margin-top: 0.35rem;
+    }
+
+    .page {
+      width: min(1180px, calc(100% - 2rem));
+      margin: 0 auto;
+    }
+
+    .hero {
+      padding: 5rem 0 3rem;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      gap: 0.45rem;
+      align-items: center;
+      margin-bottom: 1.2rem;
+      padding: 0.35rem 0.75rem;
+      border: 1px solid color-mix(in srgb, var(--primary), transparent 65%);
+      border-radius: 999px;
+      background: var(--primary-soft);
+      color: var(--primary);
+      font-size: 0.83rem;
+      font-weight: 750;
+      letter-spacing: 0.04em;
+    }
+
+    .hero-lead {
+      max-width: 860px;
+      margin-top: 1.4rem;
+      color: var(--muted);
+      font-size: clamp(1.02rem, 2vw, 1.28rem);
+    }
+
+    .hero-summary {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1rem;
+      margin-top: 2rem;
+    }
+
+    .metric {
+      padding: 1.1rem 1.2rem;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: color-mix(in srgb, var(--panel), transparent 4%);
+      box-shadow: var(--shadow);
+    }
+
+    .metric strong {
+      display: block;
+      margin-bottom: 0.2rem;
+      color: var(--primary);
+      font-size: 1.08rem;
+    }
+
+    .metric span {
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 235px minmax(0, 1fr);
+      gap: 1.5rem;
+      align-items: start;
+      padding-bottom: 5rem;
+    }
+
+    .toc {
+      position: sticky;
+      top: 1rem;
+      padding: 1rem;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+
+    .toc strong {
+      display: block;
+      margin-bottom: 0.65rem;
+      font-size: 0.9rem;
+    }
+
+    .toc a {
+      display: block;
+      padding: 0.34rem 0.55rem;
+      border-radius: 7px;
+      color: var(--muted);
+      font-size: 0.86rem;
+    }
+
+    .toc a:hover {
+      background: var(--primary-soft);
+      color: var(--primary);
+      text-decoration: none;
+    }
+
+    main {
+      min-width: 0;
+    }
+
+    section {
+      margin-bottom: 1.4rem;
+      padding: clamp(1.2rem, 3vw, 2rem);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+
+    .callout {
+      margin: 1rem 0;
+      padding: 1rem 1.1rem;
+      border: 1px solid var(--line);
+      border-left: 4px solid var(--primary);
+      border-radius: 10px;
+      background: var(--panel-soft);
+    }
+
+    .callout strong {
+      color: var(--primary);
+    }
+
+    .callout.warning {
+      border-left-color: var(--orange);
+      background: var(--orange-soft);
+    }
+
+    .callout.warning strong {
+      color: var(--orange);
+    }
+
+    .callout.success {
+      border-left-color: var(--green);
+      background: var(--green-soft);
+    }
+
+    .callout.success strong {
+      color: var(--green);
+    }
+
+    .grid-2,
+    .grid-3 {
+      display: grid;
+      gap: 1rem;
+      margin-top: 1rem;
+    }
+
+    .grid-2 {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .grid-3 {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .card {
+      padding: 1rem;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--panel-soft);
+    }
+
+    .card h3 {
+      margin-top: 0;
+    }
+
+    .card p:last-child {
+      margin-bottom: 0;
+    }
+
+    .pill {
+      display: inline-block;
+      margin: 0.15rem 0.25rem 0.15rem 0;
+      padding: 0.2rem 0.58rem;
+      border-radius: 999px;
+      background: var(--primary-soft);
+      color: var(--primary);
+      font-size: 0.78rem;
+      font-weight: 700;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(72px, 1fr));
+      gap: 0.6rem;
+      align-items: stretch;
+      margin-top: 1.2rem;
+    }
+
+    .flow-step,
+    .flow-arrow {
+      display: grid;
+      place-items: center;
+      min-height: 92px;
+      text-align: center;
+    }
+
+    .flow-step {
+      padding: 0.7rem;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--panel-soft);
+      font-size: 0.86rem;
+      font-weight: 700;
+    }
+
+    .flow-step small {
+      display: block;
+      margin-top: 0.25rem;
+      color: var(--muted);
+      font-weight: 500;
+    }
+
+    .flow-arrow {
+      min-height: auto;
+      color: var(--primary);
+      font-size: 1.5rem;
+      font-weight: 800;
+    }
+
+    .sequence {
+      overflow-x: auto;
+      margin-top: 1rem;
+      padding: 1rem;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--panel-soft);
+    }
+
+    .sequence svg {
+      display: block;
+      min-width: 760px;
+      width: 100%;
+      height: auto;
+    }
+
+    .timeline {
+      overflow-x: auto;
+      margin-top: 1rem;
+      padding-bottom: 0.4rem;
+    }
+
+    .timeline-inner {
+      min-width: 760px;
+    }
+
+    .timeline-row {
+      display: grid;
+      grid-template-columns: 145px repeat(10, minmax(52px, 1fr));
+      gap: 3px;
+      margin-bottom: 4px;
+      align-items: stretch;
+    }
+
+    .timeline-label,
+    .slot {
+      min-height: 42px;
+      padding: 0.45rem;
+      border-radius: 6px;
+      font-size: 0.74rem;
+    }
+
+    .timeline-label {
+      display: flex;
+      align-items: center;
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    .slot {
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--line);
+      text-align: center;
+    }
+
+    .slot.old {
+      border-color: color-mix(in srgb, var(--cyan), transparent 55%);
+      background: var(--cyan-soft);
+      color: var(--cyan);
+    }
+
+    .slot.compute {
+      border-color: color-mix(in srgb, var(--purple), transparent 55%);
+      background: var(--purple-soft);
+      color: var(--purple);
+    }
+
+    .slot.drop {
+      border-color: color-mix(in srgb, var(--red), transparent 55%);
+      background: var(--red-soft);
+      color: var(--red);
+      text-decoration: line-through;
+    }
+
+    .slot.new {
+      border-color: color-mix(in srgb, var(--green), transparent 55%);
+      background: var(--green-soft);
+      color: var(--green);
+    }
+
+    .weight-bar {
+      display: grid;
+      grid-template-columns: 4fr 6fr 10fr;
+      overflow: hidden;
+      margin: 1rem 0 0.45rem;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+    }
+
+    .weight-bar div {
+      min-height: 74px;
+      padding: 0.8rem;
+      text-align: center;
+      font-size: 0.82rem;
+      font-weight: 700;
+    }
+
+    .weight-hard {
+      background: var(--purple-soft);
+      color: var(--purple);
+    }
+
+    .weight-fade {
+      background: linear-gradient(90deg, var(--purple-soft), var(--panel-soft));
+      color: var(--muted);
+    }
+
+    .weight-free {
+      background: var(--panel-soft);
+      color: var(--muted);
+    }
+
+    .formula {
+      overflow-x: auto;
+      margin: 1rem 0;
+      padding: 1rem 1.2rem;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--code-bg);
+      color: var(--code-text);
+      font-family: "STIX Two Math", "Cambria Math", Georgia, serif;
+      font-size: 1.05rem;
+      line-height: 1.8;
+    }
+
+    table {
+      width: 100%;
+      margin-top: 1rem;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+    }
+
+    th,
+    td {
+      padding: 0.75rem;
+      border: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: var(--panel-soft);
+      color: var(--text);
+    }
+
+    td {
+      color: var(--muted);
+    }
+
+    details {
+      margin-top: 0.8rem;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--panel-soft);
+    }
+
+    summary {
+      cursor: pointer;
+      padding: 0.85rem 1rem;
+      color: var(--text);
+      font-weight: 750;
+    }
+
+    details > div {
+      padding: 0 1rem 1rem;
+      color: var(--muted);
+    }
+
+    .source-list {
+      display: grid;
+      gap: 0.65rem;
+      margin-top: 1rem;
+    }
+
+    .source-item {
+      display: grid;
+      grid-template-columns: minmax(230px, 0.9fr) 1.3fr;
+      gap: 1rem;
+      padding: 0.8rem;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--panel-soft);
+    }
+
+    .source-item code {
+      overflow-wrap: anywhere;
+    }
+
+    .source-item span {
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .footer {
+      padding: 0 0 3rem;
+      color: var(--muted);
+      text-align: center;
+      font-size: 0.85rem;
+    }
+
+    @media (max-width: 920px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+
+      .toc {
+        position: static;
+        columns: 2;
+      }
+
+      .toc strong {
+        column-span: all;
+      }
+
+      .hero-summary,
+      .grid-3 {
+        grid-template-columns: 1fr;
+      }
+
+      .flow {
+        grid-template-columns: 1fr;
+      }
+
+      .flow-arrow {
+        transform: rotate(90deg);
+      }
+    }
+
+    @media (max-width: 650px) {
+      .hero {
+        padding-top: 3rem;
+      }
+
+      .grid-2 {
+        grid-template-columns: 1fr;
+      }
+
+      .toc {
+        columns: 1;
+      }
+
+      .source-item {
+        grid-template-columns: 1fr;
+        gap: 0.35rem;
+      }
+
+      section {
+        padding: 1.1rem;
+      }
+    }
+
+    @media print {
+      body {
+        background: white;
+      }
+
+      .page {
+        width: 100%;
+      }
+
+      .hero {
+        padding-top: 1rem;
+      }
+
+      .layout {
+        display: block;
+      }
+
+      .toc {
+        display: none;
+      }
+
+      section {
+        break-inside: avoid;
+        box-shadow: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="hero page">
+    <div class="eyebrow">LeRobot · Real-Time Chunking</div>
+    <h1>RTC 执行过程详解</h1>
+    <p class="hero-lead">
+      从控制线程、后台推理线程、动作队列到 flow-matching 去噪引导，完整解释
+      LeRobot 如何让高延迟 VLA 策略在机器人持续运动时生成下一段动作，并平滑替换旧动作轨迹。
+    </p>
+    <div class="hero-summary">
+      <div class="metric">
+        <strong>异步执行</strong>
+        <span>机器人执行旧动作时，后台并行生成下一段 action chunk。</span>
+      </div>
+      <div class="metric">
+        <strong>重叠引导</strong>
+        <span>新 chunk 的前缀在去噪过程中向旧 chunk 的剩余轨迹靠拢。</span>
+      </div>
+      <div class="metric">
+        <strong>延迟对齐</strong>
+        <span>新结果到达后丢弃已经过时的前缀，再替换执行队列。</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="page layout">
+    <nav class="toc" aria-label="目录">
+      <strong>目录</strong>
+      <a href="#problem">1. RTC 解决什么问题</a>
+      <a href="#architecture">2. 运行时架构</a>
+      <a href="#lifecycle">3. 完整执行流程</a>
+      <a href="#timeline">4. 时间线示例</a>
+      <a href="#guidance">5. 去噪引导原理</a>
+      <a href="#queue">6. 动作队列合并</a>
+      <a href="#processing">7. 数据处理细节</a>
+      <a href="#parameters">8. 参数与调优</a>
+      <a href="#warmup">9. Warmup 与异常</a>
+      <a href="#pseudocode">10. 伪代码</a>
+      <a href="#usage">11. 启动方式</a>
+      <a href="#faq">12. 常见问题</a>
+      <a href="#source-map">13. 源码索引</a>
+    </nav>
+
+    <main>
+      <section id="problem">
+        <h2>1. RTC 解决什么问题</h2>
+        <p>
+          Pi0、Pi0.5、SmolVLA 等策略不是每次只预测一个动作，而是一次生成一段未来动作，
+          例如 <code>50</code> 个控制步。问题在于大模型推理可能耗时数百毫秒，而机器人控制周期可能只有
+          20～50 毫秒。
+        </p>
+
+        <div class="grid-3">
+          <article class="card">
+            <h3>只做同步推理</h3>
+            <p>控制线程等待模型返回，机器人会暂停或降低控制频率。</p>
+          </article>
+          <article class="card">
+            <h3>只做异步推理</h3>
+            <p>虽然不会暂停，但新旧 chunk 可能对同一未来时刻给出完全不同的动作。</p>
+          </article>
+          <article class="card">
+            <h3>RTC</h3>
+            <p>异步生成新 chunk，并在生成阶段约束其前缀，使新旧轨迹连续衔接。</p>
+          </article>
+        </div>
+
+        <div class="callout success">
+          <strong>一句话理解：</strong>
+          RTC = 异步 action chunk 推理 + 推理延迟估计 + 新旧 chunk 重叠区引导 + 延迟后队列替换。
+        </div>
+
+        <p>
+          RTC 是<strong>推理时方法</strong>，不要求重新训练策略。它最适合使用 flow matching
+          生成动作的 chunk-based 策略。
+        </p>
+      </section>
+
+      <section id="architecture">
+        <h2>2. 运行时架构</h2>
+        <p>LeRobot 将 RTC 分成两个持续并行的执行路径：</p>
+
+        <div class="sequence" aria-label="RTC 双线程时序图">
+          <svg viewBox="0 0 980 520" role="img" aria-labelledby="sequence-title sequence-desc">
+            <title id="sequence-title">RTC 主控制线程和后台推理线程时序</title>
+            <desc id="sequence-desc">
+              主线程持续采集观测并执行动作，后台线程读取最新观测和剩余动作，生成并合并新动作块。
+            </desc>
+            <defs>
+              <marker id="arrow-blue" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+                <path d="M0,0 L0,6 L9,3 z" fill="#2563eb"/>
+              </marker>
+              <marker id="arrow-green" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+                <path d="M0,0 L0,6 L9,3 z" fill="#15803d"/>
+              </marker>
+            </defs>
+
+            <rect x="70" y="20" width="280" height="55" rx="12" fill="var(--primary-soft)" stroke="var(--primary)"/>
+            <text x="210" y="53" text-anchor="middle" fill="var(--primary)" font-size="17" font-weight="700">
+              主控制线程
+            </text>
+            <rect x="630" y="20" width="280" height="55" rx="12" fill="var(--purple-soft)" stroke="var(--purple)"/>
+            <text x="770" y="53" text-anchor="middle" fill="var(--purple)" font-size="17" font-weight="700">
+              RTC 后台推理线程
+            </text>
+
+            <line x1="210" y1="75" x2="210" y2="490" stroke="var(--line)" stroke-width="2" stroke-dasharray="7 7"/>
+            <line x1="770" y1="75" x2="770" y2="490" stroke="var(--line)" stroke-width="2" stroke-dasharray="7 7"/>
+
+            <text x="225" y="115" fill="var(--text)" font-size="15">读取机器人 observation</text>
+            <line x1="220" y1="135" x2="755" y2="135" stroke="#2563eb" stroke-width="2.5" marker-end="url(#arrow-blue)"/>
+            <text x="485" y="126" text-anchor="middle" fill="var(--primary)" font-size="13">
+              notify_observation（覆盖为最新观测）
+            </text>
+
+            <text x="225" y="180" fill="var(--text)" font-size="15">从 ActionQueue 获取动作</text>
+            <text x="225" y="208" fill="var(--text)" font-size="15">插值、后处理并发送给机器人</text>
+
+            <rect x="665" y="170" width="210" height="90" rx="10" fill="var(--panel-soft)" stroke="var(--line)"/>
+            <text x="770" y="200" text-anchor="middle" fill="var(--text)" font-size="14">队列低于 threshold</text>
+            <text x="770" y="228" text-anchor="middle" fill="var(--text)" font-size="14">读取 leftover + 最新观测</text>
+            <text x="770" y="250" text-anchor="middle" fill="var(--muted)" font-size="12">主线程仍在持续执行</text>
+
+            <rect x="665" y="290" width="210" height="80" rx="10" fill="var(--purple-soft)" stroke="var(--purple)"/>
+            <text x="770" y="322" text-anchor="middle" fill="var(--purple)" font-size="14" font-weight="700">
+              predict_action_chunk
+            </text>
+            <text x="770" y="348" text-anchor="middle" fill="var(--purple)" font-size="13">
+              flow matching + RTC guidance
+            </text>
+
+            <line x1="755" y1="400" x2="220" y2="400" stroke="#15803d" stroke-width="2.5" marker-end="url(#arrow-green)"/>
+            <text x="485" y="391" text-anchor="middle" fill="var(--green)" font-size="13">
+              merge：丢弃过时前缀并替换 ActionQueue
+            </text>
+
+            <text x="225" y="445" fill="var(--text)" font-size="15">继续执行新 chunk 的有效部分</text>
+            <text x="770" y="445" text-anchor="middle" fill="var(--text)" font-size="15">等待下一次队列低水位</text>
+          </svg>
+        </div>
+
+        <div class="grid-2">
+          <article class="card">
+            <h3>主控制线程负责</h3>
+            <ul>
+              <li>按照目标 FPS 读取机器人 observation。</li>
+              <li>把最新 observation 发布给推理线程。</li>
+              <li>从 <code>ActionQueue</code> 取一个动作。</li>
+              <li>通过插值器和机器人 action processor 发送动作。</li>
+            </ul>
+          </article>
+          <article class="card">
+            <h3>RTC 后台线程负责</h3>
+            <ul>
+              <li>监控队列中剩余动作数量。</li>
+              <li>估计推理对应多少个控制步。</li>
+              <li>读取旧 chunk 的未执行部分。</li>
+              <li>生成、后处理并合并新的 action chunk。</li>
+            </ul>
+          </article>
+        </div>
+
+        <div class="callout">
+          <strong>关键点：</strong>
+          两个线程共享的核心对象是线程安全的 <code>ActionQueue</code>。队列通过
+          <code>Lock</code> 保护，避免取动作与替换 chunk 同时修改状态。
+        </div>
+      </section>
+
+      <section id="lifecycle">
+        <h2>3. 完整执行流程</h2>
+
+        <div class="flow" aria-label="RTC 执行流程">
+          <div class="flow-step">创建引擎<small>factory dispatch</small></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">启动线程<small>start</small></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">恢复推理<small>resume</small></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">控制循环<small>obs / action</small></div>
+        </div>
+
+        <h3>步骤 1：根据 CLI 配置创建 RTC 引擎</h3>
+        <p>
+          当 <code>--inference.type=rtc</code> 被选中时，factory 创建
+          <code>RTCInferenceEngine</code>，并把 policy、preprocessor、postprocessor、
+          机器人 wrapper、FPS、设备和 RTC 配置注入其中。
+        </p>
+
+        <h3>步骤 2：启动后台线程</h3>
+        <p>
+          <code>start()</code> 创建空的 <code>ActionQueue</code>、初始化 observation holder，
+          然后启动名为 <code>RTCInference</code> 的 daemon thread。线程启动后默认等待，
+          直到 rollout strategy 调用 <code>resume()</code>。
+        </p>
+
+        <h3>步骤 3：主控制循环发布 observation</h3>
+        <p>
+          每个控制循环都会读取原始 observation。经过 robot observation processor 后，
+          <code>notify_observation()</code> 把它写入共享 holder。holder 只保留最新观测，
+          不会积压历史 observation。
+        </p>
+        <div class="callout">
+          <strong>为什么只保留最新 observation？</strong>
+          RTC 的目标是让下一段动作尽可能响应机器人当前状态。处理已经过时的 observation
+          只会增加额外延迟。
+        </div>
+
+        <h3>步骤 4：主线程持续消费动作</h3>
+        <p>
+          当插值器需要新目标动作时，主线程调用 <code>engine.get_action()</code>。
+          RTC 引擎不会在这里运行模型，只会从共享队列弹出一个已经准备好的动作，因此控制线程不会被大模型推理阻塞。
+        </p>
+
+        <h3>步骤 5：后台线程在队列低水位时启动推理</h3>
+        <p>
+          当 <code>queue.qsize() &lt;= queue_threshold</code> 时，后台线程：
+        </p>
+        <ol>
+          <li>记录推理开始前的队列消费索引 <code>idx_before</code>。</li>
+          <li>读取旧 chunk 尚未消费的原始动作 <code>prev_actions</code>。</li>
+          <li>用历史最大推理耗时估算本轮 <code>inference_delay</code>。</li>
+          <li>构造模型输入并执行 preprocessor。</li>
+          <li>调用 <code>policy.predict_action_chunk(...)</code>。</li>
+        </ol>
+
+        <div class="formula">
+          control_period = 1 / fps<br>
+          inference_delay = ceil(max_recorded_latency / control_period)
+        </div>
+
+        <p>
+          使用向上取整是保守策略：只要推理耗时跨过下一个控制周期，就按额外一个动作步计算，
+          避免低估已经过去的时间。
+        </p>
+
+        <h3>步骤 6：模型在每个去噪步骤应用 RTC guidance</h3>
+        <p>
+          Policy 先进行普通 flow-matching 速度预测；如果存在旧 chunk 的 leftover，
+          <code>RTCProcessor</code> 会计算重叠区误差和梯度修正，让新 chunk 的前缀向旧轨迹靠拢。
+          第一轮推理没有旧 chunk，因此自动退化为标准 action chunk 生成。
+        </p>
+
+        <h3>步骤 7：后处理并测量真实延迟</h3>
+        <p>
+          新 chunk 生成后，一份未经 postprocessor 的动作保留在 <code>original_queue</code>，
+          另一份经过 postprocessor 后放入机器人执行队列。随后按本轮真实耗时重新计算
+          <code>new_delay</code>。
+        </p>
+
+        <h3>步骤 8：丢弃过时前缀并替换队列</h3>
+        <p>
+          推理期间机器人一直在执行旧 chunk，因此新 chunk 的前若干动作对应的时刻已经过去。
+          <code>ActionQueue.merge()</code> 会丢弃新 chunk 的前 <code>new_delay</code> 步，
+          再用剩余动作整体替换旧队列。
+        </p>
+        <pre><code>original_queue = original_actions[new_delay:]
+queue          = processed_actions[new_delay:]
+last_index     = 0</code></pre>
+
+        <h3>步骤 9：循环继续</h3>
+        <p>
+          主线程随后开始消费新队列。等剩余动作再次低于 threshold，后台线程再次读取 leftover，
+          生成下一段 action chunk，形成持续滚动的实时控制。
+        </p>
+      </section>
+
+      <section id="timeline">
+        <h2>4. 一个具体时间线示例</h2>
+        <p>假设：</p>
+        <p>
+          <span class="pill">FPS = 30</span>
+          <span class="pill">控制周期 ≈ 33.3 ms</span>
+          <span class="pill">chunk_size = 50</span>
+          <span class="pill">推理耗时 = 240 ms</span>
+          <span class="pill">execution_horizon = 10</span>
+        </p>
+
+        <div class="formula">
+          real_delay = ceil(240 ms / 33.3 ms) = ceil(7.2) = 8 个动作步
+        </div>
+
+        <div class="timeline">
+          <div class="timeline-inner">
+            <div class="timeline-row">
+              <div class="timeline-label">控制步</div>
+              <div class="slot">t0</div>
+              <div class="slot">t1</div>
+              <div class="slot">t2</div>
+              <div class="slot">t3</div>
+              <div class="slot">t4</div>
+              <div class="slot">t5</div>
+              <div class="slot">t6</div>
+              <div class="slot">t7</div>
+              <div class="slot">t8</div>
+              <div class="slot">t9+</div>
+            </div>
+            <div class="timeline-row">
+              <div class="timeline-label">机器人实际执行</div>
+              <div class="slot old">旧 A0</div>
+              <div class="slot old">旧 A1</div>
+              <div class="slot old">旧 A2</div>
+              <div class="slot old">旧 A3</div>
+              <div class="slot old">旧 A4</div>
+              <div class="slot old">旧 A5</div>
+              <div class="slot old">旧 A6</div>
+              <div class="slot old">旧 A7</div>
+              <div class="slot new">新 B8</div>
+              <div class="slot new">新 B9…</div>
+            </div>
+            <div class="timeline-row">
+              <div class="timeline-label">后台模型状态</div>
+              <div class="slot compute">生成 B</div>
+              <div class="slot compute">生成 B</div>
+              <div class="slot compute">生成 B</div>
+              <div class="slot compute">生成 B</div>
+              <div class="slot compute">生成 B</div>
+              <div class="slot compute">生成 B</div>
+              <div class="slot compute">生成 B</div>
+              <div class="slot compute">返回 B</div>
+              <div class="slot">等待</div>
+              <div class="slot">等待</div>
+            </div>
+            <div class="timeline-row">
+              <div class="timeline-label">新 chunk 合并结果</div>
+              <div class="slot drop">B0</div>
+              <div class="slot drop">B1</div>
+              <div class="slot drop">B2</div>
+              <div class="slot drop">B3</div>
+              <div class="slot drop">B4</div>
+              <div class="slot drop">B5</div>
+              <div class="slot drop">B6</div>
+              <div class="slot drop">B7</div>
+              <div class="slot new">B8</div>
+              <div class="slot new">B9…B49</div>
+            </div>
+          </div>
+        </div>
+
+        <p>
+          模型生成 B0～B49 的 240 ms 内，机器人已经执行了旧 chunk 的 8 个动作。
+          因此 B0～B7 已经过时，最终只把 B8～B49 放进执行队列。
+        </p>
+
+        <div class="callout warning">
+          <strong>常见误解：</strong>
+          RTC 不是等新 chunk 返回后，从 B0 开始执行。这样会让机器人执行“过去时刻”的规划，
+          产生额外相位延迟。LeRobot 会显式丢弃这一段。
+        </div>
+      </section>
+
+      <section id="guidance">
+        <h2>5. Flow-matching 去噪中的 RTC 引导</h2>
+        <p>
+          仅仅异步替换队列还不够。新 chunk 独立生成时，它的开头可能与旧 chunk
+          当前正在执行的方向不一致。RTC 把新 chunk 的重叠前缀看作一个类似
+          <strong>inpainting</strong> 的约束问题。
+        </p>
+
+        <h3>5.1 前缀权重区域</h3>
+        <div class="weight-bar">
+          <div class="weight-hard">
+            权重 = 1<br>
+            0 ～ inference_delay
+          </div>
+          <div class="weight-fade">
+            权重逐渐衰减<br>
+            inference_delay ～ execution_horizon
+          </div>
+          <div class="weight-free">
+            权重 = 0<br>
+            execution_horizon 之后
+          </div>
+        </div>
+        <p>
+          已经被推理延迟覆盖的区域使用最强约束；随后逐步减弱，使模型最终可以根据最新 observation
+          自由调整远期动作。这样在“连续性”和“反应性”之间形成软过渡。
+        </p>
+
+        <h3>5.2 每个去噪步的代码逻辑</h3>
+        <p>对于当前噪声状态 <code>x_t</code>：</p>
+        <ol>
+          <li>原始 policy denoiser 给出基础速度 <code>v_t</code>。</li>
+          <li>由当前状态和速度估计最终干净动作 <code>x1_t</code>。</li>
+          <li>计算它与旧 chunk leftover 的加权误差。</li>
+          <li>通过 autograd 求误差对 <code>x_t</code> 的修正方向。</li>
+          <li>将修正项按动态 guidance weight 加到基础速度上。</li>
+        </ol>
+
+        <div class="formula">
+          x1_t = x_t - time · v_t<br>
+          error = (previous_leftover - x1_t) · prefix_weights<br>
+          correction = ∂x1_t / ∂x_t applied to error<br>
+          guided_v_t = v_t - guidance_weight · correction
+        </div>
+
+        <p>
+          最后，policy 仍按原本的 flow-matching 更新规则执行：
+        </p>
+        <div class="formula">
+          dt = -1 / num_steps<br>
+          x_t ← x_t + dt · guided_v_t
+        </div>
+
+        <h3>5.3 Guidance weight</h3>
+        <p>
+          LeRobot 根据当前去噪时间动态计算 guidance weight，并用
+          <code>max_guidance_weight</code> 截断。越接近去噪终点，修正能够更直接地控制最终动作；
+          上限用于避免修正过强导致数值或轨迹不稳定。
+        </p>
+
+        <h3>5.4 四种 prefix schedule</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Schedule</th>
+              <th>重叠区行为</th>
+              <th>特点</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>EXP</code></td>
+              <td>从强约束非线性衰减到 0</td>
+              <td>通常适合作为起点，衔接柔和。</td>
+            </tr>
+            <tr>
+              <td><code>LINEAR</code></td>
+              <td>从 1 线性下降到 0</td>
+              <td>行为直观，当前配置类默认值。</td>
+            </tr>
+            <tr>
+              <td><code>ONES</code></td>
+              <td>整个 execution horizon 都为 1</td>
+              <td>最强调连续性，但可能降低对新状态的反应。</td>
+            </tr>
+            <tr>
+              <td><code>ZEROS</code></td>
+              <td>delay 前为 1，之后立即变成 0</td>
+              <td>硬切换，过渡区没有平滑衰减。</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="callout">
+          <strong>第一次推理：</strong>
+          <code>prev_chunk_left_over is None</code>，RTCProcessor 直接返回基础
+          <code>v_t</code>，不会施加任何引导。只有从第二个 chunk 开始才存在新旧轨迹衔接。
+        </div>
+      </section>
+
+      <section id="queue">
+        <h2>6. ActionQueue 如何保存和合并动作</h2>
+
+        <div class="grid-2">
+          <article class="card">
+            <h3><code>original_queue</code></h3>
+            <p>
+              保存 policy 原始输出，主要用于下一轮 RTC guidance。它仍位于模型动作空间中，
+              因而能直接与下一次生成过程对齐。
+            </p>
+          </article>
+          <article class="card">
+            <h3><code>queue</code></h3>
+            <p>
+              保存经过 policy postprocessor 的动作，是主控制线程实际取出并交给机器人执行的版本。
+            </p>
+          </article>
+        </div>
+
+        <h3>6.1 取动作</h3>
+        <p>
+          <code>get()</code> 返回 <code>queue[last_index]</code> 的 clone，然后
+          <code>last_index += 1</code>。clone 防止队列内部 tensor 被外部代码意外修改。
+        </p>
+
+        <h3>6.2 获取 leftover</h3>
+        <pre><code>prev_chunk_left_over = original_queue[last_index:]
+processed_left_over  = queue[last_index:]</code></pre>
+        <p>
+          <code>last_index</code> 之前的动作已经执行，不应再约束下一段轨迹；只有尚未执行的尾部才是
+          RTC 的对齐目标。
+        </p>
+
+        <h3>6.3 RTC 模式的 merge</h3>
+        <p>
+          当 <code>RTCConfig.enabled=True</code> 时，merge 采用“替换”而不是“追加”：
+        </p>
+        <pre><code>clamped_delay = clamp(real_delay, 0, len(new_chunk))
+original_queue = original_actions[clamped_delay:].clone()
+queue          = processed_actions[clamped_delay:].clone()
+last_index     = 0</code></pre>
+
+        <p>
+          替换允许新策略根据最新 observation 修正未来计划；如果只是把新 chunk 追加到旧 chunk
+          后面，机器人会长期执行基于旧 observation 生成的动作，响应性很差。
+        </p>
+
+        <h3>6.4 为什么同时记录推理前索引</h3>
+        <p>
+          后台推理开始时记录 <code>action_index_before_inference</code>。推理结束后，
+          当前 <code>last_index</code> 与旧索引之差表示推理期间实际消费的动作数量。
+          代码会将它与按耗时计算的 <code>real_delay</code> 比较并记录 debug 信息。
+        </p>
+      </section>
+
+      <section id="processing">
+        <h2>7. Observation、动作后处理与相对动作</h2>
+
+        <h3>7.1 Observation 路径</h3>
+        <div class="flow">
+          <div class="flow-step">机器人原始观测<small>get_observation</small></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">硬件观测处理<small>robot processor</small></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">构造 batch<small>dataset frame</small></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">Policy preprocessor<small>normalize / tokenize</small></div>
+        </div>
+
+        <p>
+          后台线程会把最新 observation 转成 dataset frame，移动到 policy device，
+          加入 task 文本，并执行 policy preprocessor。RTC 并不会绕过现有的数据处理链。
+        </p>
+
+        <h3>7.2 动作路径</h3>
+        <div class="flow">
+          <div class="flow-step">Policy 原始 chunk<small>original</small></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">Policy postprocessor<small>denormalize</small></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">ActionInterpolator<small>控制频率插值</small></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">机器人 action processor<small>send_action</small></div>
+        </div>
+
+        <h3>7.3 相对动作的重新锚定</h3>
+        <p>
+          如果 preprocessor 中启用了 <code>RelativeActionsProcessorStep</code>，旧 chunk
+          的动作是相对于<strong>旧状态</strong>表达的，而新一轮模型输入基于<strong>当前状态</strong>。
+          直接把旧相对动作作为 guidance 前缀，会产生坐标系错位。
+        </p>
+        <p>RTC 引擎因此执行以下转换：</p>
+        <ol>
+          <li>读取队列中 postprocessed leftover，获得旧动作的绝对表示。</li>
+          <li>读取 RelativeActionsProcessorStep 缓存的当前原始 state。</li>
+          <li>以当前 state 为锚点，重新生成相对动作前缀。</li>
+          <li>必要时再次归一化到 policy 的输入动作空间。</li>
+        </ol>
+
+        <div class="callout warning">
+          <strong>这一步不能省略：</strong>
+          对 relative-action policy 而言，“相同的相对数值”不一定表示“相同的绝对目标”。
+          重新锚定确保 RTC 比较的是同一物理轨迹。
+        </div>
+
+        <h3>7.4 固定前缀长度</h3>
+        <p>
+          leftover 在送入 policy 前会被截断或补零到 <code>execution_horizon</code>。
+          固定形状有利于稳定的 <code>torch.compile</code> 图，避免每次剩余动作数量变化导致重新编译。
+        </p>
+      </section>
+
+      <section id="parameters">
+        <h2>8. 关键参数与调优</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>参数</th>
+              <th>作用</th>
+              <th>增大后的影响</th>
+              <th>建议</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>execution_horizon</code></td>
+              <td>新旧 chunk 进行前缀约束的最大长度。</td>
+              <td>更平滑，但新 chunk 更难快速改变策略。</td>
+              <td>可从 8～12 开始。</td>
+            </tr>
+            <tr>
+              <td><code>max_guidance_weight</code></td>
+              <td>限制 RTC 修正强度。</td>
+              <td>旧轨迹约束更强，过大可能僵硬或数值不稳。</td>
+              <td>10-step flow matching 可从 10.0 开始。</td>
+            </tr>
+            <tr>
+              <td><code>prefix_attention_schedule</code></td>
+              <td>定义重叠区内约束如何衰减。</td>
+              <td>取决于具体 schedule。</td>
+              <td>希望柔和过渡时优先尝试 EXP。</td>
+            </tr>
+            <tr>
+              <td><code>queue_threshold</code></td>
+              <td>队列剩余多少动作时触发下一轮推理。</td>
+              <td>更早开始推理、缓冲更充足，但 observation 可能更旧。</td>
+              <td>必须结合 chunk size 和推理延迟调节。</td>
+            </tr>
+            <tr>
+              <td><code>fps</code></td>
+              <td>用于计算控制周期和离散 inference delay。</td>
+              <td>相同推理秒数会对应更多 delay steps。</td>
+              <td>必须与实际控制频率一致。</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>调参判断</h3>
+        <div class="grid-2">
+          <article class="card">
+            <h3>chunk 交界仍然抖动</h3>
+            <ul>
+              <li>提高 <code>execution_horizon</code>。</li>
+              <li>提高 <code>max_guidance_weight</code>。</li>
+              <li>检查 FPS 和真实控制周期是否一致。</li>
+              <li>确认 relative actions 已正确重新锚定。</li>
+            </ul>
+          </article>
+          <article class="card">
+            <h3>动作过于保守、反应迟缓</h3>
+            <ul>
+              <li>减小 <code>execution_horizon</code>。</li>
+              <li>减小 <code>max_guidance_weight</code>。</li>
+              <li>使用衰减更快的 schedule。</li>
+              <li>避免把 <code>queue_threshold</code> 设得过大。</li>
+            </ul>
+          </article>
+        </div>
+
+        <div class="callout">
+          <strong>平衡关系：</strong>
+          RTC 的核心取舍是 continuity 与 reactivity。重叠约束越长、越强，chunk
+          边界越平滑；但策略对突然出现的新障碍或状态变化也会响应得更慢。
+        </div>
+      </section>
+
+      <section id="warmup">
+        <h2>9. torch.compile Warmup、暂停与异常处理</h2>
+
+        <h3>9.1 Compile warmup</h3>
+        <p>
+          启用 <code>torch.compile</code> 时，最初若干次推理用于编译和 warmup，
+          耗时通常不能代表稳定运行延迟。RTC 会：
+        </p>
+        <ol>
+          <li>等待配置数量的 warmup inference 完成。</li>
+          <li>在 warmup 期间重置 latency tracker，避免编译耗时污染延迟估计。</li>
+          <li>warmup 完成后清空 policy、processor、action queue 和 interpolator 的旧状态。</li>
+          <li>重新恢复后台推理，开始正式 rollout。</li>
+        </ol>
+
+        <h3>9.2 Pause / resume / reset</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>调用</th>
+              <th>效果</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>pause()</code></td>
+              <td>清除 active event，后台线程停止启动新推理，但线程本身仍存在。</td>
+            </tr>
+            <tr>
+              <td><code>resume()</code></td>
+              <td>设置 active event，允许后台线程继续检查 observation 和队列。</td>
+            </tr>
+            <tr>
+              <td><code>reset()</code></td>
+              <td>重置 policy、preprocessor、postprocessor，并清空 ActionQueue。</td>
+            </tr>
+            <tr>
+              <td><code>stop()</code></td>
+              <td>设置 shutdown event，并等待后台线程退出，join 超时为 3 秒。</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>9.3 推理失败</h3>
+        <p>
+          单次异常被视为临时错误，线程等待 0.5 秒后重试。连续失败达到 10 次时：
+        </p>
+        <ul>
+          <li>设置 RTC failed 标记。</li>
+          <li>解除可能正在等待 warmup 的主线程。</li>
+          <li>设置全局 shutdown event，让 rollout strategy 退出控制循环。</li>
+        </ul>
+
+        <div class="callout warning">
+          <strong>队列耗尽：</strong>
+          <code>get_action()</code> 会返回 <code>None</code>，不会伪造一个成功动作。
+          上层只有在插值器已有可用输出时才能继续发送动作。实际部署应确保 chunk、threshold
+          和推理性能能提供足够缓冲。
+        </div>
+      </section>
+
+      <section id="pseudocode">
+        <h2>10. 与源码对应的简化伪代码</h2>
+
+        <h3>主控制线程</h3>
+        <pre><code>engine.start()
+engine.resume()
+
+while not shutdown:
+    loop_start = now()
+
+    obs_raw = robot.get_observation()
+    obs_processed = robot_observation_processor(obs_raw)
+    engine.notify_observation(obs_processed)
+
+    if interpolator.needs_new_action():
+        action = engine.get_action(obs_processed)
+        if action is not None:
+            interpolator.add(action)
+
+    action = interpolator.get()
+    if action is not None:
+        action = robot_action_processor(action, obs_raw)
+        robot.send_action(action)
+
+    sleep_until_next_control_tick(loop_start, fps)</code></pre>
+
+        <h3>RTC 后台线程</h3>
+        <pre><code>latencies = LatencyTracker()
+control_period = 1.0 / fps
+
+while not shutdown:
+    if not active:
+        sleep()
+        continue
+
+    obs = latest_observation
+    if obs is None or queue.qsize() &gt; queue_threshold:
+        sleep()
+        continue
+
+    start = now()
+    index_before = queue.get_action_index()
+    previous_leftover = queue.get_left_over()
+
+    estimated_delay = ceil(latencies.max() / control_period)
+    batch = preprocess(obs)
+    previous_leftover = maybe_reanchor_relative_actions(previous_leftover)
+    previous_leftover = pad_or_truncate(previous_leftover, execution_horizon)
+
+    original_actions = policy.predict_action_chunk(
+        batch,
+        inference_delay=estimated_delay,
+        prev_chunk_left_over=previous_leftover,
+    )
+    processed_actions = postprocess(original_actions)
+
+    measured_latency = now() - start
+    real_delay = ceil(measured_latency / control_period)
+    latencies.add(measured_latency)
+
+    queue.merge(
+        original_actions,
+        processed_actions,
+        real_delay,
+        index_before,
+    )</code></pre>
+
+        <h3>单个 flow-matching 去噪步骤</h3>
+        <pre><code>base_velocity = policy_denoise_step(x_t)
+
+if previous_leftover is None:
+    velocity = base_velocity
+else:
+    weights = build_prefix_weights(
+        inference_delay,
+        execution_horizon,
+        chunk_size,
+    )
+    predicted_clean_action = x_t - time * base_velocity
+    error = (previous_leftover - predicted_clean_action) * weights
+    correction = autograd(predicted_clean_action, x_t, error)
+    velocity = base_velocity - guidance_weight * correction
+
+x_t = x_t + dt * velocity</code></pre>
+      </section>
+
+      <section id="usage">
+        <h2>11. 如何启动 RTC rollout</h2>
+        <pre><code>lerobot-rollout \
+  --strategy.type=base \
+  --policy.path=${HF_USERNAME}/policy_repo_id \
+  --inference.type=rtc \
+  --inference.rtc.execution_horizon=10 \
+  --inference.rtc.max_guidance_weight=10.0 \
+  --inference.queue_threshold=30 \
+  --robot.type=so100_follower \
+  --robot.port=/dev/tty.usbmodem58FA0834591 \
+  --task="Move the object to the target" \
+  --duration=120 \
+  --device=cuda</code></pre>
+
+        <p>
+          选择 RTC inference engine 后，policy 必须支持在
+          <code>predict_action_chunk()</code> 中接收 <code>inference_delay</code> 和
+          <code>prev_chunk_left_over</code>，并在内部的 flow-matching 循环中调用
+          <code>RTCProcessor.denoise_step()</code>。
+        </p>
+
+        <div class="callout success">
+          <strong>当前典型支持策略：</strong>
+          Pi0、Pi0.5 和 SmolVLA。是否可用最终取决于对应 policy 实现是否接入 RTCProcessor，
+          不能只通过 CLI 强行让任意 policy 获得 RTC 能力。
+        </div>
+      </section>
+
+      <section id="faq">
+        <h2>12. 常见问题</h2>
+
+        <details open>
+          <summary>RTC 和普通异步推理有什么区别？</summary>
+          <div>
+            普通异步推理只解决“模型计算时机器人不要停下来”；RTC 进一步解决“新旧 chunk
+            在交界处不要跳变”。LeRobot 的 RTC engine 同时包含异步执行和 RTC guidance。
+          </div>
+        </details>
+
+        <details>
+          <summary>为什么 guidance 使用 original_queue，而执行使用 processed queue？</summary>
+          <div>
+            Guidance 发生在模型动作空间，应该与 policy 原始输出比较；机器人执行则需要经过反归一化、
+            action mapping 等 postprocess。混用两种空间会造成尺度和语义不一致。
+          </div>
+        </details>
+
+        <details>
+          <summary>为什么用历史最大延迟，而不是最后一次延迟？</summary>
+          <div>
+            最大延迟是保守估计，可降低偶发推理抖动导致 guidance 区间不足的风险。
+            LatencyTracker 默认维护最近 100 个样本，但其 <code>max_latency</code> 是自 reset
+            以来的最大值；warmup 后会 reset。
+          </div>
+        </details>
+
+        <details>
+          <summary>execution_horizon 必须大于 inference_delay 吗？</summary>
+          <div>
+            最好让 horizon 覆盖典型 delay 并留出柔和衰减区。实现中
+            <code>start = min(inference_delay, execution_horizon)</code>，因此 delay 超过 horizon
+            时不会越界，但整个 horizon 会成为强约束区，失去渐变过渡。
+          </div>
+        </details>
+
+        <details>
+          <summary>如果推理时间比整个 chunk 的执行时间还长会怎样？</summary>
+          <div>
+            merge 会把 delay clamp 到 chunk 长度，结果可能是空队列。此时 RTC 无法维持连续控制。
+            应减小模型延迟、降低控制 FPS、增大 chunk size，或部署更快硬件，而不能只靠调 guidance
+            参数解决。
+          </div>
+        </details>
+
+        <details>
+          <summary>RTC 会修改训练过程吗？</summary>
+          <div>
+            不会。RTCProcessor 只在推理的 action sampling / denoising 路径中工作；
+            policy 的训练 loss 和训练数据不需要因此改变。
+          </div>
+        </details>
+      </section>
+
+      <section id="source-map">
+        <h2>13. 源码索引</h2>
+        <p>以下文件组成当前 LeRobot RTC 的主要执行链路：</p>
+
+        <div class="source-list">
+          <div class="source-item">
+            <code>src/lerobot/rollout/inference/factory.py</code>
+            <span>注册 <code>inference.type=rtc</code>，创建 RTCInferenceEngine。</span>
+          </div>
+          <div class="source-item">
+            <code>src/lerobot/rollout/inference/rtc.py</code>
+            <span>后台线程、观测发布、延迟估计、policy 调用、warmup 和异常处理。</span>
+          </div>
+          <div class="source-item">
+            <code>src/lerobot/policies/rtc/action_queue.py</code>
+            <span>线程安全动作队列、leftover 获取、延迟裁剪与 chunk 替换。</span>
+          </div>
+          <div class="source-item">
+            <code>src/lerobot/policies/rtc/modeling_rtc.py</code>
+            <span>prefix weights、误差梯度、guidance weight 和 guided velocity。</span>
+          </div>
+          <div class="source-item">
+            <code>src/lerobot/policies/rtc/configuration_rtc.py</code>
+            <span>RTCConfig：schedule、max_guidance_weight、execution_horizon 和 debug。</span>
+          </div>
+          <div class="source-item">
+            <code>src/lerobot/policies/rtc/latency_tracker.py</code>
+            <span>推理延迟窗口、最大值和 percentile 统计。</span>
+          </div>
+          <div class="source-item">
+            <code>src/lerobot/policies/rtc/relative.py</code>
+            <span>relative-action policy 的 RTC 前缀重新锚定。</span>
+          </div>
+          <div class="source-item">
+            <code>src/lerobot/rollout/strategies/core.py</code>
+            <span>主控制循环中的 observation 通知、动作获取、插值和发送。</span>
+          </div>
+          <div class="source-item">
+            <code>src/lerobot/policies/pi0/modeling_pi0.py</code>
+            <span>Pi0 在 action sampling 的每个 flow-matching step 中接入 RTCProcessor。</span>
+          </div>
+          <div class="source-item">
+            <code>docs/source/rtc.mdx</code>
+            <span>用户侧概念说明、参数介绍、离线评估和真机命令。</span>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <footer class="page footer">
+    LeRobot RTC 执行过程详解 · 单文件离线文档
+  </footer>
+</body>
+</html>

@@ -32,9 +32,19 @@ from ..inference import InferenceEngine
 
 if TYPE_CHECKING:
     from ..configs import RolloutStrategyConfig
-    from ..context import HardwareContext, ProcessorContext, RolloutContext, RuntimeContext
+    from ..context import HardwareContext, RolloutContext, RuntimeContext
 
 logger = logging.getLogger(__name__)
+
+_ACTION_COLORS = {
+    "header": "\033[95m",
+    "step": "\033[90m",
+    "pos": "\033[92m",
+    "rot": "\033[96m",
+    "gripper": "\033[93m",
+    "robot": "\033[94m",
+    "reset": "\033[0m",
+}
 
 _REALMAN_PIKA_ACTION_KEYS = (
     "eef_x.pos",
@@ -47,11 +57,12 @@ _REALMAN_PIKA_ACTION_KEYS = (
 )
 
 
-def _format_action_for_confirmation(action: dict) -> str:
-    return ", ".join(f"{key}={float(value):.4f}" for key, value in action.items())
-
-
-def _format_realman_pika_action_debug(action: dict, obs_raw: dict, label: str = "rollout") -> str | None:
+def _format_realman_pika_action_debug(
+    action: dict,
+    obs_raw: dict,
+    label: str = "rollout",
+    status: str = "pending",
+) -> str | None:
     del obs_raw
     if not all(key in action for key in _REALMAN_PIKA_ACTION_KEYS):
         return None
@@ -68,34 +79,62 @@ def _format_realman_pika_action_debug(action: dict, obs_raw: dict, label: str = 
     realman_pos = np.array2string(realman_relative[:3], precision=4, suppress_small=True)
     realman_rot = np.array2string(realman_relative[3:6], precision=4, suppress_small=True)
 
-    colors = {
-        "header": "\033[95m",
-        "step": "\033[90m",
-        "pos": "\033[92m",
-        "rot": "\033[96m",
-        "gripper": "\033[93m",
-        "robot": "\033[94m",
-        "reset": "\033[0m",
-    }
+    colors = _ACTION_COLORS
     return (
         f"\n{colors['header']}[ActionDebug:{label}] model Pika TCP relative offset + RealMan TCP relative command "
         f"(h=1){colors['reset']}\n"
-        f"{colors['step']}step 00{colors['reset']} [pending] | "
+        f"{colors['step']}step 00 [{status}]{colors['reset']} | "
         f"model_pika_relative "
         f"{colors['pos']}pos: {pika_pos}{colors['reset']} "
         f"{colors['rot']}rot: {pika_rot}{colors['reset']} "
         f"{colors['gripper']}gripper: {pika_relative[6]:.4f}{colors['reset']} | "
-        f"{colors['robot']}robot_realman_tcp_relative "
-        f"pos: {realman_pos} rot: {realman_rot} gripper: {pika_relative[6]:.4f}{colors['reset']}"
+        f"{colors['robot']}robot_realman_tcp_relative{colors['reset']} "
+        f"{colors['pos']}pos: {realman_pos}{colors['reset']} "
+        f"{colors['rot']}rot: {realman_rot}{colors['reset']} "
+        f"{colors['gripper']}gripper: {pika_relative[6]:.4f}{colors['reset']}"
     )
 
 
-def _format_action_debug(action: dict, obs_raw: dict) -> str:
-    return _format_realman_pika_action_debug(action, obs_raw) or f"\nPolicy action: {_format_action_for_confirmation(action)}"
+def _format_grouped_action_debug(action: dict, label: str, status: str) -> str:
+    grouped: dict[str, list[str]] = {"pos": [], "rot": [], "gripper": []}
+    rotation_markers = ("rx", "ry", "rz", "wx", "wy", "wz", "roll", "pitch", "yaw", "quat", "rot")
+
+    for key, value in action.items():
+        normalized_key = key.lower()
+        formatted = f"{key}={float(value):.4f}"
+        if "gripper" in normalized_key:
+            group = "gripper"
+        elif any(marker in normalized_key for marker in rotation_markers):
+            group = "rot"
+        else:
+            group = "pos"
+        grouped[group].append(formatted)
+
+    colors = _ACTION_COLORS
+    components = [
+        f"{colors[group]}{group}: {', '.join(values)}{colors['reset']}"
+        for group, values in grouped.items()
+        if values
+    ]
+    return (
+        f"\n{colors['header']}[ActionDebug:{label}]{colors['reset']} "
+        f"{colors['step']}[{status}]{colors['reset']} | " + " ".join(components)
+    )
+
+
+def _format_action_debug(
+    action: dict,
+    obs_raw: dict,
+    label: str = "rollout",
+    status: str = "pending",
+) -> str:
+    return _format_realman_pika_action_debug(action, obs_raw, label, status) or _format_grouped_action_debug(
+        action, label, status
+    )
 
 
 def _confirm_action(ctx: RolloutContext, action: dict, obs_raw: dict) -> bool:
-    print(_format_action_debug(action, obs_raw), flush=True)
+    print(_format_action_debug(action, obs_raw, status="pending"), flush=True)
     while True:
         try:
             response = input("Send to robot? [Enter/y=yes, n/s=skip, q=quit] ").strip().lower()
@@ -385,5 +424,8 @@ def send_next_action(
     processed = ctx.processors.robot_action_processor((action_dict, obs_raw))
     if ctx.runtime.cfg.confirm_each_action and not _confirm_action(ctx, processed, obs_raw):
         return None
-    ctx.hardware.robot_wrapper.send_action(processed)
+    sent_action = ctx.hardware.robot_wrapper.send_action(processed)
+    if ctx.runtime.cfg.log_controller_actions:
+        action_to_log = sent_action if isinstance(sent_action, dict) else processed
+        print(_format_action_debug(action_to_log, obs_raw, label="controller", status="sent"), flush=True)
     return action_dict
