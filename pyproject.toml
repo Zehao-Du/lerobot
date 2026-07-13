@@ -357,6 +357,8 @@ lerobot-edit-dataset="lerobot.scripts.lerobot_edit_dataset:main"
 lerobot-setup-can="lerobot.scripts.lerobot_setup_can:main"
 lerobot-annotate="lerobot.scripts.lerobot_annotate:main"
 lerobot-rollout="lerobot.scripts.lerobot_rollout:main"
+lerobot-realman-pika-test="lerobot.scripts.lerobot_realman_pika_test:main"
+lerobot-sam3-recolor-test="lerobot.scripts.lerobot_sam3_recolor_test:main"
 
 # ---------------- Tool Configurations ----------------
 

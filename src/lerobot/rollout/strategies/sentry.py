@@ -111,7 +111,7 @@ class SentryStrategy(RolloutStrategy):
                         break
 
                     obs = robot.get_observation()
-                    obs_processed = self._process_observation_and_notify(ctx.processors, obs)
+                    obs_processed = self._process_observation_and_notify(ctx, obs)
 
                     if self._handle_warmup(cfg.use_torch_compile, loop_start, control_interval):
                         continue

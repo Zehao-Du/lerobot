@@ -302,6 +302,8 @@ def make_pre_post_processors(
             policy configuration type.
     """
     if pretrained_path:
+        preprocessor_overrides = dict(kwargs.get("preprocessor_overrides", {}) or {})
+        postprocessor_overrides = dict(kwargs.get("postprocessor_overrides", {}) or {})
         if isinstance(policy_cfg, GrootConfig):
             from .groot.processor_groot import make_groot_pre_post_processors_from_pretrained
 
@@ -310,8 +312,8 @@ def make_pre_post_processors(
                 pretrained_path=pretrained_path,
                 dataset_stats=kwargs.get("dataset_stats"),
                 dataset_meta=kwargs.get("dataset_meta"),
-                preprocessor_overrides=kwargs.get("preprocessor_overrides"),
-                postprocessor_overrides=kwargs.get("postprocessor_overrides"),
+                preprocessor_overrides=preprocessor_overrides,
+                postprocessor_overrides=postprocessor_overrides,
                 preprocessor_config_filename=kwargs.get(
                     "preprocessor_config_filename", f"{POLICY_PREPROCESSOR_DEFAULT_NAME}.json"
                 ),
@@ -319,13 +321,19 @@ def make_pre_post_processors(
                     "postprocessor_config_filename", f"{POLICY_POSTPROCESSOR_DEFAULT_NAME}.json"
                 ),
             )
+        if isinstance(policy_cfg, SmolVLAConfig):
+            # Registers SmolVLA-specific processor steps before JSON deserialization.
+            from .smolvla.processor_smolvla import reconnect_smolvla_ee_processors
+
+            tokenizer_overrides = preprocessor_overrides.setdefault("tokenizer_processor", {})
+            tokenizer_overrides.setdefault("tokenizer_name", policy_cfg.vlm_model_name)
 
         preprocessor = PolicyProcessorPipeline.from_pretrained(
             pretrained_model_name_or_path=pretrained_path,
             config_filename=kwargs.get(
                 "preprocessor_config_filename", f"{POLICY_PREPROCESSOR_DEFAULT_NAME}.json"
             ),
-            overrides=kwargs.get("preprocessor_overrides", {}),
+            overrides=preprocessor_overrides,
             to_transition=batch_to_transition,
             to_output=transition_to_batch,
             revision=pretrained_revision,
@@ -335,12 +343,14 @@ def make_pre_post_processors(
             config_filename=kwargs.get(
                 "postprocessor_config_filename", f"{POLICY_POSTPROCESSOR_DEFAULT_NAME}.json"
             ),
-            overrides=kwargs.get("postprocessor_overrides", {}),
+            overrides=postprocessor_overrides,
             to_transition=policy_action_to_transition,
             to_output=transition_to_policy_action,
             revision=pretrained_revision,
         )
         _reconnect_relative_absolute_steps(preprocessor, postprocessor)
+        if isinstance(policy_cfg, SmolVLAConfig):
+            reconnect_smolvla_ee_processors(preprocessor, postprocessor)
         if isinstance(policy_cfg, Evo1Config):
             from .evo1.processor_evo1 import reconcile_evo1_processors
 

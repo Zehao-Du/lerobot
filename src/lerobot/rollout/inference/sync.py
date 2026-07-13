@@ -25,6 +25,7 @@ import torch
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.policies.utils import make_robot_action, prepare_observation_for_inference
 from lerobot.processor import PolicyProcessorPipeline
+from lerobot.utils.sam3_recolor import Sam3PinkBlockRecolorer
 
 from .base import InferenceEngine
 
@@ -64,6 +65,7 @@ class SyncInferenceEngine(InferenceEngine):
         task: str,
         device: str | None,
         robot_type: str,
+        visual_prompt_recolorer: Sam3PinkBlockRecolorer | None = None,
     ) -> None:
         self._policy = policy
         self._preprocessor = preprocessor
@@ -73,6 +75,7 @@ class SyncInferenceEngine(InferenceEngine):
         self._task = task
         self._device = torch.device(device or "cpu")
         self._robot_type = robot_type
+        self._visual_prompt_recolorer = visual_prompt_recolorer
         logger.info(
             "SyncInferenceEngine initialized (device=%s, action_keys=%d)",
             self._device,
@@ -108,6 +111,8 @@ class SyncInferenceEngine(InferenceEngine):
             else nullcontext()
         )
         with torch.inference_mode(), autocast_ctx:
+            if self._visual_prompt_recolorer is not None:
+                observation = self._visual_prompt_recolorer.recolor_observation_images(observation)
             observation = prepare_observation_for_inference(
                 observation, self._device, self._task, self._robot_type
             )

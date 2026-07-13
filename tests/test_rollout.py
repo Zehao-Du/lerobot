@@ -17,6 +17,8 @@
 from __future__ import annotations
 
 import dataclasses
+from types import SimpleNamespace
+from threading import Event
 from unittest.mock import MagicMock
 
 import pytest
@@ -157,11 +159,11 @@ def test_ring_buffer_tensor_bytes():
 # ---------------------------------------------------------------------------
 
 
-def test_thread_safe_robot_delegates():
+def test_thread_safe_robot_delegates(tmp_path):
     from lerobot.rollout.robot_wrapper import ThreadSafeRobot
     from tests.mocks.mock_robot import MockRobot, MockRobotConfig
 
-    robot = MockRobot(MockRobotConfig(n_motors=3))
+    robot = MockRobot(MockRobotConfig(n_motors=3, calibration_dir=tmp_path))
     robot.connect()
     wrapper = ThreadSafeRobot(robot)
 
@@ -177,11 +179,11 @@ def test_thread_safe_robot_delegates():
     robot.disconnect()
 
 
-def test_thread_safe_robot_properties():
+def test_thread_safe_robot_properties(tmp_path):
     from lerobot.rollout.robot_wrapper import ThreadSafeRobot
     from tests.mocks.mock_robot import MockRobot, MockRobotConfig
 
-    robot = MockRobot(MockRobotConfig(n_motors=3))
+    robot = MockRobot(MockRobotConfig(n_motors=3, calibration_dir=tmp_path))
     robot.connect()
     wrapper = ThreadSafeRobot(robot)
 
@@ -249,6 +251,121 @@ def test_create_inference_engine_sync():
         device="cpu",
     )
     assert isinstance(engine, SyncInferenceEngine)
+
+
+# ---------------------------------------------------------------------------
+# Action confirmation
+# ---------------------------------------------------------------------------
+
+
+class _FakeInference:
+    def __init__(self):
+        self.action = torch.tensor([0.1, 0.2], dtype=torch.float32)
+
+    def get_action(self, obs_frame):
+        return self.action
+
+
+class _FakeRobotWrapper:
+    def __init__(self):
+        self.sent = []
+
+    def send_action(self, action):
+        self.sent.append(action)
+        return action
+
+
+def _make_send_action_ctx(confirm_each_action: bool):
+    return SimpleNamespace(
+        runtime=SimpleNamespace(
+            cfg=SimpleNamespace(confirm_each_action=confirm_each_action),
+            shutdown_event=Event(),
+        ),
+        policy=SimpleNamespace(inference=_FakeInference()),
+        data=SimpleNamespace(
+            dataset_features={},
+            ordered_action_keys=["x.pos", "y.pos"],
+        ),
+        processors=SimpleNamespace(
+            robot_action_processor=lambda action_and_obs: action_and_obs[0],
+        ),
+        hardware=SimpleNamespace(robot_wrapper=_FakeRobotWrapper()),
+    )
+
+
+def test_send_next_action_confirms_before_dispatch(monkeypatch):
+    from lerobot.rollout.strategies.core import send_next_action
+    from lerobot.utils.action_interpolator import ActionInterpolator
+
+    ctx = _make_send_action_ctx(confirm_each_action=True)
+    monkeypatch.setattr("builtins.input", lambda _: "y")
+
+    action = send_next_action({}, {}, ctx, ActionInterpolator())
+
+    assert action == {"x.pos": pytest.approx(0.1), "y.pos": pytest.approx(0.2)}
+    assert ctx.hardware.robot_wrapper.sent == [action]
+
+
+def test_send_next_action_can_skip_confirmed_action(monkeypatch):
+    from lerobot.rollout.strategies.core import send_next_action
+    from lerobot.utils.action_interpolator import ActionInterpolator
+
+    ctx = _make_send_action_ctx(confirm_each_action=True)
+    monkeypatch.setattr("builtins.input", lambda _: "n")
+
+    action = send_next_action({}, {}, ctx, ActionInterpolator())
+
+    assert action is None
+    assert ctx.hardware.robot_wrapper.sent == []
+    assert not ctx.runtime.shutdown_event.is_set()
+
+
+def test_send_next_action_confirmation_can_quit(monkeypatch):
+    from lerobot.rollout.strategies.core import send_next_action
+    from lerobot.utils.action_interpolator import ActionInterpolator
+
+    ctx = _make_send_action_ctx(confirm_each_action=True)
+    monkeypatch.setattr("builtins.input", lambda _: "q")
+
+    action = send_next_action({}, {}, ctx, ActionInterpolator())
+
+    assert action is None
+    assert ctx.hardware.robot_wrapper.sent == []
+    assert ctx.runtime.shutdown_event.is_set()
+
+
+def test_realman_pika_action_confirmation_prints_offset_debug(capsys, monkeypatch):
+    from lerobot.rollout.strategies.core import _confirm_action
+
+    ctx = _make_send_action_ctx(confirm_each_action=True)
+    obs = {
+        "eef_x.pos": 0.1,
+        "eef_y.pos": 0.2,
+        "eef_z.pos": 0.3,
+        "eef_rx.pos": 0.0,
+        "eef_ry.pos": 0.0,
+        "eef_rz.pos": 0.0,
+        "gripper.pos": 0.04,
+    }
+    action = {
+        "eef_x.pos": 0.11,
+        "eef_y.pos": 0.18,
+        "eef_z.pos": 0.33,
+        "eef_rx.pos": 0.01,
+        "eef_ry.pos": -0.02,
+        "eef_rz.pos": 0.03,
+        "gripper.pos": 0.05,
+    }
+    monkeypatch.setattr("builtins.input", lambda _: "y")
+
+    assert _confirm_action(ctx, action, obs) is True
+
+    output = capsys.readouterr().out
+    assert "[ActionDebug:rollout]" in output
+    assert "model_pika_relative" in output
+    assert "robot_realman_tcp_relative" in output
+    assert "pika_absolute" not in output
+    assert "gripper: 0.0500" in output
 
 
 # ---------------------------------------------------------------------------

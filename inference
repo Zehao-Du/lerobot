@@ -1,0 +1,74 @@
+lerobot-rollout \
+--strategy.type=base \
+--policy.path=/home/ubuntu/Documents/CodeField/zehao/lerobot/outputs/smolvla_pick_place/checkpoints/160000/pretrained_model \
+--policy.vlm_model_name=/home/ubuntu/Documents/CodeField/zehao/lerobot/outputs/SmolVLM2-500M-Video-Instruct \
+--robot.type=realman_pika \
+--robot.calibration_dir=/home/ubuntu/Documents/CodeField/zehao/lerobot/.cache/realman_pika_calibration \
+--robot.robot_ip=192.168.1.18 \
+--robot.gripper_serial_port=/dev/ttyUSB60 \
+--robot.cameras='{rgb: {type: intelrealsense, serial_number_or_name: "419122270755", width: 640, height: 480, fps: 30}, fisheye: {type: opencv,
+index_or_path: "/dev/video60", width: 640, height: 480, fps: 30}}' \
+--inference.type=rtc \
+--inference.rtc.execution_horizon=10 \
+--fps=30 \
+--robot.max_relative_pos=0.005 \
+--robot.max_relative_rot=0.01 \
+--robot.max_pos_speed=0.01 \
+--robot.max_rot_speed=0.10 \
+--confirm_each_action=false \
+--task="pick the pick block and place it onto the black pad" \
+--duration=30 \
+--record_cameras=true \
+--record_camera_output_dir=/home/ubuntu/Documents/CodeField/zehao/lerobot/outputs/rollout_camera_recordings/origin \
+--record_camera_fps=30
+
+# /home/ubuntu/Documents/CodeField/zehao/lerobot/outputs/smolvla_pick_place/checkpoints/160000/pretrained_model
+# task="pick the pick block and place it onto the black pad"
+
+lerobot-rollout \
+--strategy.type=base \
+--policy.path=/home/ubuntu/Documents/CodeField/zehao/lerobot/outputs/smolvla_pick_place_blue/checkpoints/160000/pretrained_model \
+--policy.vlm_model_name=/home/ubuntu/Documents/CodeField/zehao/lerobot/outputs/SmolVLM2-500M-Video-Instruct \
+--robot.type=realman_pika \
+--robot.calibration_dir=/home/ubuntu/Documents/CodeField/zehao/lerobot/.cache/realman_pika_calibration \
+--robot.robot_ip=192.168.1.18 \
+--robot.gripper_serial_port=/dev/ttyUSB60 \
+--robot.cameras='{rgb: {type: intelrealsense, serial_number_or_name: "419122270755", width: 640, height: 480, fps: 30}, fisheye: {type: opencv,
+index_or_path: "/dev/video60", width: 640, height: 480, fps: 30}}' \
+--inference.type=rtc \
+--inference.rtc.execution_horizon=10 \
+--fps=5 \
+--robot.max_relative_pos=0.005 \
+--robot.max_relative_rot=0.01 \
+--robot.max_pos_speed=0.01 \
+--robot.max_rot_speed=0.10 \
+--confirm_each_action=false \
+--task="pick the blue block and place it onto the black pad" \
+--duration=600 \
+--visual_prompt=true \
+--record_cameras=true \
+--record_camera_output_dir=/home/ubuntu/Documents/CodeField/zehao/lerobot/outputs/rollout_camera_recordings/visual_prompt \
+--record_camera_fps=5
+
+# /home/ubuntu/Documents/CodeField/zehao/lerobot/outputs/smolvla_pick_place_blue/checkpoints/180000/pretrained_model
+# task="pick the blue block and place it onto the black pad"
+
+controller 测试
+
+python -m lerobot.scripts.lerobot_realman_pika_test \
+--robot_ip=192.168.1.18 \
+--gripper_serial_port=/dev/ttyUSB60 \
+--robot_command_mode=movep_canfd \
+--robot_interpolation_mode=trajectory \
+--max_pos_speed=0.05 \
+--max_rot_speed=0.15 \
+--action_latency=0.1
+
+
+# sam3 test
+
+PYTHONPATH=src python -m lerobot.scripts.lerobot_sam3_recolor_test \
+--checkpoint /home/ubuntu/Documents/CodeField/zehao/lerobot/outputs/sam3 \
+--rgb-serial 419122270755 \
+--fisheye-device /dev/video60 \
+--output-dir /home/ubuntu/Documents/CodeField/zehao/lerobot/tmp/sam3_recolor_test

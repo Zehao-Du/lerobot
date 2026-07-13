@@ -410,7 +410,7 @@ class DAggerStrategy(RolloutStrategy):
 
                     # --- AUTONOMOUS: policy control ---
                     else:
-                        obs_processed = self._process_observation_and_notify(ctx.processors, obs)
+                        obs_processed = self._process_observation_and_notify(ctx, obs)
 
                         if self._handle_warmup(cfg.use_torch_compile, loop_start, control_interval):
                             continue
@@ -592,7 +592,7 @@ class DAggerStrategy(RolloutStrategy):
 
                     # --- AUTONOMOUS: policy control (no recording) ---
                     else:
-                        obs_processed = self._process_observation_and_notify(ctx.processors, obs)
+                        obs_processed = self._process_observation_and_notify(ctx, obs)
 
                         if self._handle_warmup(cfg.use_torch_compile, loop_start, control_interval):
                             continue

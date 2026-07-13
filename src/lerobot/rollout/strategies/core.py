@@ -36,6 +36,85 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_REALMAN_PIKA_ACTION_KEYS = (
+    "eef_x.pos",
+    "eef_y.pos",
+    "eef_z.pos",
+    "eef_rx.pos",
+    "eef_ry.pos",
+    "eef_rz.pos",
+    "gripper.pos",
+)
+
+
+def _format_action_for_confirmation(action: dict) -> str:
+    return ", ".join(f"{key}={float(value):.4f}" for key, value in action.items())
+
+
+def _format_realman_pika_action_debug(action: dict, obs_raw: dict, label: str = "rollout") -> str | None:
+    del obs_raw
+    if not all(key in action for key in _REALMAN_PIKA_ACTION_KEYS):
+        return None
+
+    import numpy as np
+
+    from lerobot.robots.realman_pika.transforms import pika_relative_pose_to_realman_tcp_relative_pose
+
+    pika_relative = np.array([float(action[key]) for key in _REALMAN_PIKA_ACTION_KEYS], dtype=np.float64)
+    realman_relative = pika_relative_pose_to_realman_tcp_relative_pose(pika_relative[:6])
+
+    pika_pos = np.array2string(pika_relative[:3], precision=4, suppress_small=True)
+    pika_rot = np.array2string(pika_relative[3:6], precision=4, suppress_small=True)
+    realman_pos = np.array2string(realman_relative[:3], precision=4, suppress_small=True)
+    realman_rot = np.array2string(realman_relative[3:6], precision=4, suppress_small=True)
+
+    colors = {
+        "header": "\033[95m",
+        "step": "\033[90m",
+        "pos": "\033[92m",
+        "rot": "\033[96m",
+        "gripper": "\033[93m",
+        "robot": "\033[94m",
+        "reset": "\033[0m",
+    }
+    return (
+        f"\n{colors['header']}[ActionDebug:{label}] model Pika TCP relative offset + RealMan TCP relative command "
+        f"(h=1){colors['reset']}\n"
+        f"{colors['step']}step 00{colors['reset']} [pending] | "
+        f"model_pika_relative "
+        f"{colors['pos']}pos: {pika_pos}{colors['reset']} "
+        f"{colors['rot']}rot: {pika_rot}{colors['reset']} "
+        f"{colors['gripper']}gripper: {pika_relative[6]:.4f}{colors['reset']} | "
+        f"{colors['robot']}robot_realman_tcp_relative "
+        f"pos: {realman_pos} rot: {realman_rot} gripper: {pika_relative[6]:.4f}{colors['reset']}"
+    )
+
+
+def _format_action_debug(action: dict, obs_raw: dict) -> str:
+    return _format_realman_pika_action_debug(action, obs_raw) or f"\nPolicy action: {_format_action_for_confirmation(action)}"
+
+
+def _confirm_action(ctx: RolloutContext, action: dict, obs_raw: dict) -> bool:
+    print(_format_action_debug(action, obs_raw), flush=True)
+    while True:
+        try:
+            response = input("Send to robot? [Enter/y=yes, n/s=skip, q=quit] ").strip().lower()
+        except EOFError:
+            logger.warning("No stdin available for action confirmation; requesting rollout shutdown.")
+            ctx.runtime.shutdown_event.set()
+            return False
+
+        if response in ("", "y", "yes"):
+            return True
+        if response in ("n", "no", "s", "skip"):
+            logger.info("Skipped policy action by human confirmation.")
+            return False
+        if response in ("q", "quit", "exit"):
+            logger.info("Stopping rollout by human confirmation.")
+            ctx.runtime.shutdown_event.set()
+            return False
+        logger.warning("Please press Enter/y to send, n/s to skip, or q to quit.")
+
 
 class RolloutStrategy(abc.ABC):
     """Abstract base for rollout execution strategies.
@@ -69,7 +148,7 @@ class RolloutStrategy(abc.ABC):
         self._cached_obs_processed = None
         logger.info("Inference engine started")
 
-    def _process_observation_and_notify(self, processors: ProcessorContext, obs_raw: dict) -> dict:
+    def _process_observation_and_notify(self, ctx: RolloutContext, obs_raw: dict) -> dict:
         """Run the observation processor and notify the engine — throttled to policy ticks.
 
         Callers are responsible for calling ``robot.get_observation()`` every loop
@@ -87,7 +166,10 @@ class RolloutStrategy(abc.ABC):
         because reset makes ``needs_new_action()`` return True on the next call.
         """
         if self._cached_obs_processed is None or self._interpolator.needs_new_action():
-            obs_processed = processors.robot_observation_processor(obs_raw)
+            obs_processed = ctx.processors.robot_observation_processor(obs_raw)
+            recolorer = ctx.runtime.visual_prompt_recolorer
+            if recolorer is not None:
+                obs_processed = recolorer.recolor_observation_images(obs_processed)
             self._engine.notify_observation(obs_processed)
             self._cached_obs_processed = obs_processed
         return self._cached_obs_processed
@@ -301,5 +383,7 @@ def send_next_action(
         raise ValueError(f"Interpolated tensor length ({len(interp)}) != action keys ({len(ordered_keys)})")
     action_dict = {k: interp[i].item() for i, k in enumerate(ordered_keys)}
     processed = ctx.processors.robot_action_processor((action_dict, obs_raw))
+    if ctx.runtime.cfg.confirm_each_action and not _confirm_action(ctx, processed, obs_raw):
+        return None
     ctx.hardware.robot_wrapper.send_action(processed)
     return action_dict

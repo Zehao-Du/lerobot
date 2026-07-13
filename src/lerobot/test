@@ -1,0 +1,15 @@
+lerobot-rollout \
+--strategy.type=base \
+--policy.path=/home/ubuntu/Documents/CodeField/zehao/lerobot/outputs/smolvla_pick_place_blue/checkpoints/180000/pretrained_model \
+--policy.vlm_model_name=/home/ubuntu/Documents/CodeField/zehao/lerobot/outputs/smolvla-500M-video-instruct \
+--robot.type=realman_pika \
+--robot.calibration_dir=/home/ubuntu/Documents/CodeField/zehao/lerobot/.cache/realman_pika_calibration \
+--robot.robot_ip=192.168.1.18 \
+--robot.gripper_serial_port=/dev/ttyUSB60 \
+--robot.cameras='{rgb: {type: intelrealsense, serial_number_or_name: "419122270755", width: 640, height: 480, fps: 30}, fisheye: {type: opencv,
+index_or_path: "/dev/v4l/by-path/pci-0000:00:14.0-usb-0:4.1:1.0-video-index0", width: 640, height: 480, fps: 30, fourcc: "MJPG"}}' \
+--inference.type=rtc \
+--inference.rtc.execution_horizon=10 \
+--fps=5 \
+--task="pick place blue" \
+--duration=10

@@ -19,6 +19,7 @@ from __future__ import annotations
 import abc
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import draccus
 
@@ -240,6 +241,17 @@ class RolloutConfig:
     resume: bool = False
     # Rename map for mapping robot/dataset observation keys to policy keys
     rename_map: dict[str, str] = field(default_factory=dict)
+    # When True, block before every policy action and wait for terminal confirmation.
+    # Enter/y sends the action, n/s skips it, q requests rollout shutdown.
+    confirm_each_action: bool = False
+    # When True, recolor the pink block to blue in rgb/fisheye frames before policy inference.
+    visual_prompt: bool = False
+    visual_prompt_checkpoint: Path = Path("/home/ubuntu/Documents/CodeField/zehao/lerobot/outputs/sam3")
+    # Lightweight raw camera recording for base rollout. Writes one mp4 per camera key.
+    record_cameras: bool = False
+    record_camera_keys: list[str] = field(default_factory=lambda: ["rgb", "fisheye"])
+    record_camera_output_dir: Path = Path("outputs/rollout_camera_recordings")
+    record_camera_fps: float | None = None
 
     # Hardware teardown
     # When True (default), smoothly interpolate the robot back to the joint
@@ -275,6 +287,13 @@ class RolloutConfig:
         if isinstance(self.strategy, BaseStrategyConfig) and self.dataset is not None:
             raise ValueError(
                 "Base strategy does not record data. Use sentry, highlight, or dagger for recording."
+            )
+
+        if self.visual_prompt and self.fps > 10:
+            logger.warning(
+                "visual_prompt=True runs SAM3 on camera frames before policy inference. "
+                "Current --fps=%.1f is likely too high for stable RTC control; use --fps=5 or lower.",
+                self.fps,
             )
 
         # Sentry MUST use streaming encoding to avoid disk I/O blocking the control loop

@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime
 
+from lerobot.rollout.camera_recorder import RolloutCameraRecorder
 from lerobot.utils.robot_utils import precise_sleep
 
 from ..context import RolloutContext
@@ -47,34 +49,67 @@ class BaseStrategy(RolloutStrategy):
         interpolator = self._interpolator
 
         control_interval = interpolator.get_control_interval(cfg.fps)
+        raw_camera_recorder = None
+        visual_prompt_camera_recorder = None
+        if cfg.record_cameras:
+            recording_session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+            raw_camera_recorder = RolloutCameraRecorder(
+                cfg.record_camera_output_dir,
+                camera_keys=cfg.record_camera_keys,
+                fps=cfg.record_camera_fps or cfg.fps,
+                filename_prefix="raw_" if cfg.visual_prompt else "",
+                session_id=recording_session_id,
+                raw_rgb=True,
+                convert_raw_to_mp4=True,
+            )
+            if cfg.visual_prompt:
+                visual_prompt_camera_recorder = RolloutCameraRecorder(
+                    cfg.record_camera_output_dir,
+                    camera_keys=cfg.record_camera_keys,
+                    fps=cfg.record_camera_fps or cfg.fps,
+                    filename_prefix="visual_prompt_",
+                    session_id=recording_session_id,
+                    raw_rgb=True,
+                    convert_raw_to_mp4=True,
+                )
 
         start_time = time.perf_counter()
         engine.resume()
         logger.info("Base strategy control loop started")
 
-        while not ctx.runtime.shutdown_event.is_set():
-            loop_start = time.perf_counter()
+        try:
+            while not ctx.runtime.shutdown_event.is_set():
+                loop_start = time.perf_counter()
 
-            if cfg.duration > 0 and (time.perf_counter() - start_time) >= cfg.duration:
-                logger.info("Duration limit reached (%.0fs)", cfg.duration)
-                break
+                if cfg.duration > 0 and (time.perf_counter() - start_time) >= cfg.duration:
+                    logger.info("Duration limit reached (%.0fs)", cfg.duration)
+                    break
 
-            obs = robot.get_observation()
-            obs_processed = self._process_observation_and_notify(ctx.processors, obs)
+                obs = robot.get_observation()
+                if raw_camera_recorder is not None:
+                    raw_camera_recorder.write(obs)
+                obs_processed = self._process_observation_and_notify(ctx, obs)
+                if visual_prompt_camera_recorder is not None:
+                    visual_prompt_camera_recorder.write(obs_processed)
 
-            if self._handle_warmup(cfg.use_torch_compile, loop_start, control_interval):
-                continue
+                if self._handle_warmup(cfg.use_torch_compile, loop_start, control_interval):
+                    continue
 
-            action_dict = send_next_action(obs_processed, obs, ctx, interpolator)
-            self._log_telemetry(obs_processed, action_dict, ctx.runtime)
+                action_dict = send_next_action(obs_processed, obs, ctx, interpolator)
+                self._log_telemetry(obs_processed, action_dict, ctx.runtime)
 
-            dt = time.perf_counter() - loop_start
-            if (sleep_t := control_interval - dt) > 0:
-                precise_sleep(sleep_t)
-            else:
-                logger.warning(
-                    f"Record loop is running slower ({1 / dt:.1f} Hz) than the target FPS ({cfg.fps} Hz). Dataset frames might be dropped and robot control might be unstable. Common causes are: 1) Camera FPS not keeping up 2) Policy inference taking too long 3) CPU starvation"
-                )
+                dt = time.perf_counter() - loop_start
+                if (sleep_t := control_interval - dt) > 0:
+                    precise_sleep(sleep_t)
+                else:
+                    logger.warning(
+                        f"Record loop is running slower ({1 / dt:.1f} Hz) than the target FPS ({cfg.fps} Hz). Dataset frames might be dropped and robot control might be unstable. Common causes are: 1) Camera FPS not keeping up 2) Policy inference taking too long 3) CPU starvation"
+                    )
+        finally:
+            if raw_camera_recorder is not None:
+                raw_camera_recorder.close()
+            if visual_prompt_camera_recorder is not None:
+                visual_prompt_camera_recorder.close()
 
     def teardown(self, ctx: RolloutContext) -> None:
         """Disconnect hardware and stop inference."""

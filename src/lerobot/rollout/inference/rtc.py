@@ -41,6 +41,7 @@ from lerobot.processor import (
     RelativeActionsProcessorStep,
 )
 from lerobot.utils.feature_utils import build_dataset_frame
+from lerobot.utils.sam3_recolor import Sam3PinkBlockRecolorer
 
 from ..robot_wrapper import ThreadSafeRobot
 from .base import InferenceEngine
@@ -105,6 +106,7 @@ class RTCInferenceEngine(InferenceEngine):
         compile_warmup_inferences: int = 2,
         rtc_queue_threshold: int = 30,
         shutdown_event: Event | None = None,
+        visual_prompt_recolorer: Sam3PinkBlockRecolorer | None = None,
     ) -> None:
         self._policy = policy
         self._preprocessor = preprocessor
@@ -118,6 +120,7 @@ class RTCInferenceEngine(InferenceEngine):
         self._use_torch_compile = use_torch_compile
         self._compile_warmup_inferences = compile_warmup_inferences
         self._rtc_queue_threshold = rtc_queue_threshold
+        self._visual_prompt_recolorer = visual_prompt_recolorer
 
         self._action_queue: ActionQueue | None = None
         self._obs_holder: dict[str, Any] = {}
@@ -237,6 +240,8 @@ class RTCInferenceEngine(InferenceEngine):
 
     def notify_observation(self, obs: dict) -> None:
         """Publish the latest observation for the RTC thread to consume."""
+        if self._visual_prompt_recolorer is not None:
+            obs = self._visual_prompt_recolorer.recolor_observation_images(obs)
         with self._obs_lock:
             self._obs_holder["obs"] = obs
 

@@ -47,6 +47,7 @@ from lerobot.processor.relative_action_processor import RelativeActionsProcessor
 from lerobot.robots import make_robot_from_config
 from lerobot.teleoperators import Teleoperator, make_teleoperator_from_config
 from lerobot.utils.feature_utils import combine_feature_dicts, hw_to_dataset_features
+from lerobot.utils.sam3_recolor import Sam3PinkBlockRecolorer
 
 from .configs import BaseStrategyConfig, DAggerStrategyConfig, RolloutConfig
 from .inference import (
@@ -91,6 +92,7 @@ class RuntimeContext:
 
     cfg: RolloutConfig
     shutdown_event: Event
+    visual_prompt_recolorer: Sam3PinkBlockRecolorer | None = None
 
 
 @dataclass
@@ -414,6 +416,14 @@ def build_rollout_context(
         cfg.inference.type if hasattr(cfg.inference, "type") else "sync",
     )
     task_str = cfg.dataset.single_task if cfg.dataset else cfg.task
+    visual_prompt_recolorer = None
+    if cfg.visual_prompt:
+        logger.info("Loading visual prompt recolorer from '%s'...", cfg.visual_prompt_checkpoint)
+        visual_prompt_recolorer = Sam3PinkBlockRecolorer(
+            checkpoint=cfg.visual_prompt_checkpoint,
+            device=cfg.device,
+        )
+
     inference_strategy = create_inference_engine(
         cfg.inference,
         policy=policy,
@@ -434,7 +444,11 @@ def build_rollout_context(
     # --- 8. Assemble ---------------------------------------------------
     logger.info("Rollout context assembled successfully")
     return RolloutContext(
-        runtime=RuntimeContext(cfg=cfg, shutdown_event=shutdown_event),
+        runtime=RuntimeContext(
+            cfg=cfg,
+            shutdown_event=shutdown_event,
+            visual_prompt_recolorer=visual_prompt_recolorer,
+        ),
         hardware=HardwareContext(
             robot_wrapper=robot_wrapper, teleop=teleop, initial_position=initial_position
         ),
