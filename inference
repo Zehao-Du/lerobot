@@ -10,15 +10,9 @@ lerobot-rollout \
 index_or_path: "/dev/video60", width: 640, height: 480, fps: 30}}' \
 --inference.type=rtc \
 --inference.rtc.execution_horizon=3 \
---inference.progress_replan_interval=1 \
+--inference.action_interval_s=0.56 \
+--inference.action_replan_interval=1 \
 --fps=30 \
---robot.progress_gate_enabled=true \
---robot.progress_position_tolerance_m=0.0005 \
---robot.progress_rotation_tolerance_rad=0.02 \
---robot.progress_require_gripper_target=false \
---robot.progress_settle_samples=2 \
---robot.progress_timeout_enabled=false \
---robot.progress_timeout_margin_s=0.3 \
 --robot.max_relative_pos=0.005 \
 --robot.max_relative_rot=0.01 \
 --robot.robot_action_latency=0.03 \
@@ -31,7 +25,7 @@ index_or_path: "/dev/video60", width: 640, height: 480, fps: 30}}' \
 --log_controller_actions true \
 --record_cameras=true \
 --record_camera_output_dir=/home/ubuntu/Documents/CodeField/zehao/lerobot/outputs/rollout_camera_recordings/origin \
---record_camera_fps=5
+--record_camera_fps=30
 
 
 # /home/ubuntu/Documents/CodeField/zehao/lerobot/outputs/smolvla_pick_place/checkpoints/160000/pretrained_model

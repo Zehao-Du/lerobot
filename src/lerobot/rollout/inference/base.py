@@ -72,9 +72,6 @@ class InferenceEngine(abc.ABC):
     def notify_observation(self, obs: dict) -> None:  # noqa: B027
         """Publish the latest processed observation.  Default: no-op."""
 
-    def acknowledge_action(self) -> None:  # noqa: B027
-        """Acknowledge completion of the active hardware-gated action. Default: no-op."""
-
     def pause(self) -> None:  # noqa: B027
         """Pause background inference.  Default: no-op."""
 

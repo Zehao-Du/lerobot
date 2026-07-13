@@ -13,8 +13,8 @@ from lerobot.robots.realman_pika.transforms import (
     apply_realman_tcp_relative_pose,
     pika_gripper_pose_to_realman_tcp_pose,
     pika_relative_pose_to_realman_tcp_relative_pose,
-    realman_tcp_pose_to_pika_gripper_pose,
     realman_tcp_relative_pose_to_pika_relative_pose,
+    realman_tcp_pose_to_pika_gripper_pose,
 )
 from lerobot.scripts import lerobot_realman_pika_test as hardware_test_module
 
@@ -41,7 +41,6 @@ class FakeArm:
         self.kwargs = kwargs
         self.is_ready = False
         self.scheduled = []
-        self.servoed = []
         self.pose = np.zeros((6,), dtype=np.float64)
         FakeArm.instances.append(self)
 
@@ -56,9 +55,6 @@ class FakeArm:
 
     def schedule_waypoint(self, pose, target_time):
         self.scheduled.append((np.asarray(pose, dtype=np.float64), target_time))
-
-    def servol(self, pose, duration):
-        self.servoed.append((np.asarray(pose, dtype=np.float64), duration))
 
 
 class FakeGripper:
@@ -161,126 +157,6 @@ def test_send_action_clips_and_schedules(monkeypatch, tmp_path):
     assert before + cfg.action_latency <= arm.scheduled[0][1] <= after + cfg.action_latency
     assert before + cfg.action_latency <= gripper.scheduled[0][1] <= after + cfg.action_latency
 
-    robot.disconnect()
-
-
-def test_progress_gate_waits_for_settled_hardware_target(monkeypatch, tmp_path):
-    _patch_fakes(monkeypatch)
-    cfg = RealmanPikaConfig(
-        calibration_dir=tmp_path,
-        progress_gate_enabled=True,
-        progress_settle_samples=2,
-        max_relative_pos=0.005,
-        max_pos_speed=0.01,
-    )
-    robot = RealmanPika(cfg)
-    robot.connect()
-
-    action = dict.fromkeys(STATE_ACTION_KEYS, 0.0)
-    action["eef_x.pos"] = 0.005
-    action["gripper.pos"] = 0.04
-    robot.send_action(action)
-
-    assert robot.requires_action_acknowledgement
-    target = robot._active_action_target
-    assert target is not None
-    initial_obs = dict.fromkeys(STATE_ACTION_KEYS, 0.0)
-    initial_obs["gripper.pos"] = 0.04
-    status = robot.get_action_execution_status(initial_obs)
-    assert status.active
-    assert not status.reached
-    assert status.position_error == pytest.approx(0.005)
-
-    target_obs = {key: float(value) for key, value in zip(STATE_ACTION_KEYS, target, strict=True)}
-    assert not robot.get_action_execution_status(target_obs).reached
-    reached = robot.get_action_execution_status(target_obs)
-    assert reached.reached
-    assert not reached.timed_out
-
-    robot.acknowledge_action_execution()
-    assert not robot.get_action_execution_status(target_obs).active
-    robot.disconnect()
-
-
-def test_progress_gate_times_out_and_can_hold_current_pose(monkeypatch, tmp_path):
-    _patch_fakes(monkeypatch)
-    cfg = RealmanPikaConfig(
-        calibration_dir=tmp_path,
-        progress_gate_enabled=True,
-        progress_min_timeout_s=0.01,
-        progress_timeout_margin_s=0.0,
-        max_relative_pos=0.005,
-        max_pos_speed=0.01,
-    )
-    robot = RealmanPika(cfg)
-    robot.connect()
-
-    action = dict.fromkeys(STATE_ACTION_KEYS, 0.0)
-    action["eef_x.pos"] = 0.005
-    action["gripper.pos"] = 0.04
-    robot.send_action(action)
-    assert robot._active_action_timeout_s == pytest.approx(0.6)
-    robot._active_action_started_at = time.monotonic() - 1.0
-
-    initial_obs = dict.fromkeys(STATE_ACTION_KEYS, 0.0)
-    initial_obs["gripper.pos"] = 0.04
-    status = robot.get_action_execution_status(initial_obs)
-    assert status.timed_out
-
-    robot.hold_position()
-    arm = FakeArm.instances[-1]
-    assert len(arm.servoed) == 1
-    np.testing.assert_allclose(arm.servoed[0][0], arm.pose)
-    assert not robot.get_action_execution_status(initial_obs).active
-    robot.disconnect()
-
-
-def test_progress_gate_does_not_require_gripper_target_after_contact(monkeypatch, tmp_path):
-    _patch_fakes(monkeypatch)
-    cfg = RealmanPikaConfig(
-        calibration_dir=tmp_path,
-        progress_gate_enabled=True,
-        progress_settle_samples=1,
-        progress_require_gripper_target=False,
-    )
-    robot = RealmanPika(cfg)
-    robot.connect()
-
-    action = dict.fromkeys(STATE_ACTION_KEYS, 0.0)
-    action["gripper.pos"] = 0.0
-    robot.send_action(action)
-    current_obs = dict.fromkeys(STATE_ACTION_KEYS, 0.0)
-    current_obs["gripper.pos"] = 0.04
-
-    status = robot.get_action_execution_status(current_obs)
-    assert status.reached
-    assert status.gripper_error == pytest.approx(0.04)
-    robot.disconnect()
-
-
-def test_progress_gate_can_disable_timeout(monkeypatch, tmp_path):
-    _patch_fakes(monkeypatch)
-    cfg = RealmanPikaConfig(
-        calibration_dir=tmp_path,
-        progress_gate_enabled=True,
-        progress_timeout_enabled=False,
-    )
-    robot = RealmanPika(cfg)
-    robot.connect()
-
-    action = dict.fromkeys(STATE_ACTION_KEYS, 0.0)
-    action["eef_x.pos"] = 0.005
-    action["gripper.pos"] = 0.04
-    robot.send_action(action)
-    robot._active_action_started_at = time.monotonic() - 60.0
-
-    current_obs = dict.fromkeys(STATE_ACTION_KEYS, 0.0)
-    current_obs["gripper.pos"] = 0.04
-    status = robot.get_action_execution_status(current_obs)
-    assert status.active
-    assert not status.reached
-    assert not status.timed_out
-    assert status.timeout_s is None
     robot.disconnect()
 
 

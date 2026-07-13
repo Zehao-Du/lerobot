@@ -24,8 +24,6 @@ from unittest.mock import MagicMock
 import pytest
 import torch
 
-from lerobot.robots import ActionExecutionStatus
-
 pytest.importorskip("datasets", reason="datasets is required (install lerobot[dataset])")
 
 # ---------------------------------------------------------------------------
@@ -255,36 +253,58 @@ def test_create_inference_engine_sync():
     assert isinstance(engine, SyncInferenceEngine)
 
 
-def test_rtc_engine_reserves_action_until_hardware_acknowledgement():
+def test_rtc_inference_config_validates_timed_playback():
+    from lerobot.rollout import RTCInferenceConfig
+
+    cfg = RTCInferenceConfig(action_interval_s=0.56, action_replan_interval=1)
+    assert cfg.action_interval_s == pytest.approx(0.56)
+
+    with pytest.raises(ValueError, match="action_interval_s must be > 0"):
+        RTCInferenceConfig(action_interval_s=0)
+    with pytest.raises(ValueError, match="action_replan_interval must be > 0"):
+        RTCInferenceConfig(action_replan_interval=0)
+
+
+def test_rtc_engine_paces_action_queue(monkeypatch):
     from lerobot.policies.rtc import RTCConfig
     from lerobot.policies.rtc.action_queue import ActionQueue
     from lerobot.rollout import RTCInferenceEngine
+    from lerobot.rollout.inference import rtc as rtc_module
 
-    robot = MagicMock()
-    robot.requires_action_acknowledgement = True
-    robot.action_features = {}
-    robot.robot_type = "mock"
+    clock = [10.0]
+    monkeypatch.setattr(rtc_module.time, "perf_counter", lambda: clock[0])
+
     pipeline = MagicMock()
     pipeline.steps = []
     engine = RTCInferenceEngine(
         policy=MagicMock(),
         preprocessor=pipeline,
         postprocessor=pipeline,
-        robot_wrapper=robot,
+        robot_wrapper=MagicMock(robot_type="mock", action_features={}),
         rtc_config=RTCConfig(),
         hw_features={},
         task="test",
         fps=30,
         device="cpu",
+        action_interval_s=0.56,
     )
     engine._action_queue = ActionQueue(RTCConfig())
     actions = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
     engine._action_queue.merge(actions, actions, real_delay=0)
 
     assert torch.equal(engine.get_action(None), actions[0])
+    clock[0] += 0.55
     assert engine.get_action(None) is None
-    engine.acknowledge_action()
+    clock[0] += 0.01
     assert torch.equal(engine.get_action(None), actions[1])
+
+
+def test_rtc_timed_playback_converts_latency_to_action_steps():
+    from lerobot.rollout.inference.rtc import _latency_to_action_steps
+
+    assert _latency_to_action_steps(0.0, 0.56) == 0
+    assert _latency_to_action_steps(0.55, 0.56) == 1
+    assert _latency_to_action_steps(0.57, 0.56) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -295,54 +315,26 @@ def test_rtc_engine_reserves_action_until_hardware_acknowledgement():
 class _FakeInference:
     def __init__(self):
         self.action = torch.tensor([0.1, 0.2], dtype=torch.float32)
-        self.acknowledged = 0
-        self.paused = False
 
     def get_action(self, obs_frame):
         return self.action
 
-    def acknowledge_action(self):
-        self.acknowledged += 1
-
-    def pause(self):
-        self.paused = True
-
 
 class _FakeRobotWrapper:
-    def __init__(self, progress_gated=False):
+    def __init__(self):
         self.sent = []
-        self.requires_action_acknowledgement = progress_gated
-        self.status = ActionExecutionStatus(active=False)
-        self.hold_count = 0
 
     def send_action(self, action):
         self.sent.append(action)
-        if self.requires_action_acknowledgement:
-            self.status = ActionExecutionStatus(active=True)
         return action
 
-    def get_action_execution_status(self, observation=None):
-        return self.status
 
-    def acknowledge_action_execution(self):
-        self.status = ActionExecutionStatus(active=False)
-
-    def hold_position(self):
-        self.hold_count += 1
-        self.status = ActionExecutionStatus(active=False)
-
-
-def _make_send_action_ctx(
-    confirm_each_action: bool,
-    log_controller_actions: bool = False,
-    progress_gated: bool = False,
-):
+def _make_send_action_ctx(confirm_each_action: bool, log_controller_actions: bool = False):
     return SimpleNamespace(
         runtime=SimpleNamespace(
             cfg=SimpleNamespace(
                 confirm_each_action=confirm_each_action,
                 log_controller_actions=log_controller_actions,
-                return_to_initial_position=True,
             ),
             shutdown_event=Event(),
         ),
@@ -354,7 +346,7 @@ def _make_send_action_ctx(
         processors=SimpleNamespace(
             robot_action_processor=lambda action_and_obs: action_and_obs[0],
         ),
-        hardware=SimpleNamespace(robot_wrapper=_FakeRobotWrapper(progress_gated)),
+        hardware=SimpleNamespace(robot_wrapper=_FakeRobotWrapper()),
     )
 
 
@@ -460,52 +452,6 @@ def test_send_next_action_logs_colorized_controller_action(capsys):
     assert "\033[93mgripper:" in output
     assert len(ctx.hardware.robot_wrapper.sent) == 1
     assert ctx.hardware.robot_wrapper.sent[0] == pytest.approx(action)
-
-
-def test_send_next_action_waits_for_hardware_acknowledgement():
-    from lerobot.rollout.strategies.core import send_next_action
-    from lerobot.utils.action_interpolator import ActionInterpolator
-
-    ctx = _make_send_action_ctx(confirm_each_action=False, progress_gated=True)
-    interpolator = ActionInterpolator()
-
-    first = send_next_action({}, {}, ctx, interpolator)
-    assert first is not None
-    assert len(ctx.hardware.robot_wrapper.sent) == 1
-
-    assert send_next_action({}, {}, ctx, interpolator) is None
-    assert len(ctx.hardware.robot_wrapper.sent) == 1
-    assert ctx.policy.inference.acknowledged == 0
-
-    ctx.hardware.robot_wrapper.status = ActionExecutionStatus(active=True, reached=True)
-    second = send_next_action({}, {}, ctx, interpolator)
-    assert second is not None
-    assert len(ctx.hardware.robot_wrapper.sent) == 2
-    assert ctx.policy.inference.acknowledged == 1
-
-
-def test_send_next_action_holds_and_stops_on_hardware_timeout():
-    from lerobot.rollout.strategies.core import send_next_action
-    from lerobot.utils.action_interpolator import ActionInterpolator
-
-    ctx = _make_send_action_ctx(confirm_each_action=False, progress_gated=True)
-    ctx.hardware.robot_wrapper.status = ActionExecutionStatus(
-        active=True,
-        timed_out=True,
-        elapsed_s=1.0,
-        timeout_s=0.8,
-        position_error=0.002,
-        rotation_error=0.01,
-        gripper_error=0.0,
-    )
-
-    with pytest.raises(RuntimeError, match="Hardware action timed out"):
-        send_next_action({}, {}, ctx, ActionInterpolator())
-
-    assert ctx.policy.inference.paused
-    assert ctx.hardware.robot_wrapper.hold_count == 1
-    assert ctx.runtime.shutdown_event.is_set()
-    assert not ctx.runtime.cfg.return_to_initial_position
 
 
 # ---------------------------------------------------------------------------

@@ -62,9 +62,6 @@ class ActionQueue:
         self.original_queue = None  # Original actions for RTC
         self.lock = Lock()
         self.last_index = 0
-        self.completed_count = 0
-        self.completed_count_at_last_merge = 0
-        self.epoch = 0
         self.cfg = cfg
 
     def get(self) -> Tensor | None:
@@ -80,24 +77,7 @@ class ActionQueue:
 
             action = self.queue[self.last_index]
             self.last_index += 1
-            self.completed_count += 1
             return action.clone()
-
-    def peek(self) -> Tensor | None:
-        """Return the next action without consuming it."""
-        with self.lock:
-            if self.queue is None or self.last_index >= len(self.queue):
-                return None
-            return self.queue[self.last_index].clone()
-
-    def acknowledge(self) -> bool:
-        """Mark the current action complete after hardware acknowledgement."""
-        with self.lock:
-            if self.queue is None or self.last_index >= len(self.queue):
-                return False
-            self.last_index += 1
-            self.completed_count += 1
-            return True
 
     def clear(self) -> None:
         """Clear queued actions and reset consumption index."""
@@ -105,9 +85,6 @@ class ActionQueue:
             self.queue = None
             self.original_queue = None
             self.last_index = 0
-            self.completed_count = 0
-            self.completed_count_at_last_merge = 0
-            self.epoch += 1
 
     def qsize(self) -> int:
         """Get the number of remaining actions in the queue.
@@ -139,16 +116,6 @@ class ActionQueue:
         """
         with self.lock:
             return self.last_index
-
-    def get_progress_snapshot(self) -> tuple[int, int]:
-        """Return the monotonic completed-action count and lifecycle epoch."""
-        with self.lock:
-            return self.completed_count, self.epoch
-
-    def get_completed_count_at_last_merge(self) -> int:
-        """Return the completion count captured atomically by the latest merge."""
-        with self.lock:
-            return self.completed_count_at_last_merge
 
     def get_left_over(self) -> Tensor | None:
         """Get leftover original actions for RTC prev_chunk_left_over.
@@ -183,9 +150,7 @@ class ActionQueue:
         processed_actions: Tensor,
         real_delay: int,
         action_index_before_inference: int | None = None,
-        expected_epoch: int | None = None,
-        completed_count_before_inference: int | None = None,
-    ) -> bool:
+    ):
         """Merge new actions into the queue.
 
         This method operates differently based on RTC mode:
@@ -197,32 +162,15 @@ class ActionQueue:
             processed_actions: Post-processed actions for robot (time_steps, action_dim).
             real_delay: Number of time steps of inference delay.
             action_index_before_inference: Index before inference started, for validation.
-            expected_epoch: Queue lifecycle epoch captured before inference. A mismatch means
-                the queue was reset and the stale inference result must be discarded.
-            completed_count_before_inference: Monotonic completion count captured before
-                hardware-gated inference. When provided, the merge delay is resolved atomically
-                from actual acknowledgements while holding the queue lock.
         """
         with self.lock:
-            if expected_epoch is not None and expected_epoch != self.epoch:
-                logger.info(
-                    "Discarding stale action chunk after queue reset (expected epoch=%d, current=%d)",
-                    expected_epoch,
-                    self.epoch,
-                )
-                return False
-            if completed_count_before_inference is not None:
-                delay = max(0, self.completed_count - completed_count_before_inference)
-            else:
-                delay = self._check_and_resolve_delays(real_delay, action_index_before_inference)
-            self.completed_count_at_last_merge = self.completed_count
+            delay = self._check_and_resolve_delays(real_delay, action_index_before_inference)
 
             if self.cfg.enabled:
                 self._replace_actions_queue(original_actions, processed_actions, delay)
-                return True
+                return
 
             self._append_actions_queue(original_actions, processed_actions)
-            return True
 
     def _replace_actions_queue(self, original_actions: Tensor, processed_actions: Tensor, real_delay: int):
         """Replace the queue with new actions (RTC mode).

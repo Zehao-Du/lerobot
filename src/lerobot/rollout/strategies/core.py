@@ -407,27 +407,6 @@ def send_next_action(
     engine = ctx.policy.inference
     features = ctx.data.dataset_features
     ordered_keys = ctx.data.ordered_action_keys
-    robot = ctx.hardware.robot_wrapper
-
-    if robot.requires_action_acknowledgement:
-        status = robot.get_action_execution_status(obs_raw)
-        if status.timed_out:
-            engine.pause()
-            ctx.runtime.cfg.return_to_initial_position = False
-            ctx.runtime.shutdown_event.set()
-            robot.hold_position()
-            raise RuntimeError(
-                "Hardware action timed out "
-                f"(elapsed={status.elapsed_s:.3f}s, timeout={status.timeout_s:.3f}s, "
-                f"position_error={status.position_error:.6f}m, "
-                f"rotation_error={status.rotation_error:.6f}rad, "
-                f"gripper_error={status.gripper_error:.6f}m)."
-            )
-        if status.active:
-            if not status.reached:
-                return None
-            engine.acknowledge_action()
-            robot.acknowledge_action_execution()
 
     if interpolator.needs_new_action():
         obs_frame = build_dataset_frame(features, obs_processed, prefix=OBS_STR)
@@ -444,10 +423,8 @@ def send_next_action(
     action_dict = {k: interp[i].item() for i, k in enumerate(ordered_keys)}
     processed = ctx.processors.robot_action_processor((action_dict, obs_raw))
     if ctx.runtime.cfg.confirm_each_action and not _confirm_action(ctx, processed, obs_raw):
-        if robot.requires_action_acknowledgement:
-            engine.acknowledge_action()
         return None
-    sent_action = robot.send_action(processed)
+    sent_action = ctx.hardware.robot_wrapper.send_action(processed)
     if ctx.runtime.cfg.log_controller_actions:
         action_to_log = sent_action if isinstance(sent_action, dict) else processed
         print(_format_action_debug(action_to_log, obs_raw, label="controller", status="sent"), flush=True)

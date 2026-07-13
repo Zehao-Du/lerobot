@@ -73,13 +73,16 @@ class RTCInferenceConfig(InferenceEngineConfig):
     # (e.g. ``--inference.rtc.execution_horizon=...``).
     rtc: RTCConfig = field(default_factory=RTCConfig)
     queue_threshold: int = 30
-    progress_replan_interval: int = 1
+    # Optional action playback period. Observations still run at rollout FPS,
+    # but the RTC queue advances only once per interval.
+    action_interval_s: float | None = None
+    action_replan_interval: int = 1
 
     def __post_init__(self) -> None:
-        if self.queue_threshold < 0:
-            raise ValueError(f"queue_threshold must be >= 0, got {self.queue_threshold}")
-        if self.progress_replan_interval <= 0:
-            raise ValueError(f"progress_replan_interval must be > 0, got {self.progress_replan_interval}")
+        if self.action_interval_s is not None and self.action_interval_s <= 0:
+            raise ValueError(f"action_interval_s must be > 0, got {self.action_interval_s}")
+        if self.action_replan_interval <= 0:
+            raise ValueError(f"action_replan_interval must be > 0, got {self.action_replan_interval}")
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +136,8 @@ def create_inference_engine(
             use_torch_compile=use_torch_compile,
             compile_warmup_inferences=compile_warmup_inferences,
             rtc_queue_threshold=config.queue_threshold,
-            progress_replan_interval=config.progress_replan_interval,
+            action_interval_s=config.action_interval_s,
+            action_replan_interval=config.action_replan_interval,
             shutdown_event=shutdown_event,
             visual_prompt_recolorer=visual_prompt_recolorer,
         )
