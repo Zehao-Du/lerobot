@@ -49,7 +49,7 @@ from lerobot.teleoperators import Teleoperator, make_teleoperator_from_config
 from lerobot.utils.feature_utils import combine_feature_dicts, hw_to_dataset_features
 from lerobot.utils.sam3_recolor import Sam3PinkBlockRecolorer
 
-from .configs import BaseStrategyConfig, DAggerStrategyConfig, RolloutConfig
+from .configs import ActionDebugStrategyConfig, BaseStrategyConfig, DAggerStrategyConfig, RolloutConfig
 from .inference import (
     InferenceEngine,
     RTCInferenceConfig,
@@ -401,9 +401,13 @@ def build_rollout_context(
         },
     )
 
-    if isinstance(cfg.inference, SyncInferenceConfig) and any(
-        isinstance(step, RelativeActionsProcessorStep) and step.enabled
-        for step in getattr(preprocessor, "steps", ())
+    if (
+        isinstance(cfg.inference, SyncInferenceConfig)
+        and not isinstance(cfg.strategy, ActionDebugStrategyConfig)
+        and any(
+            isinstance(step, RelativeActionsProcessorStep) and step.enabled
+            for step in getattr(preprocessor, "steps", ())
+        )
     ):
         raise NotImplementedError(
             "SyncInferenceEngine does not support policies with relative actions for now."

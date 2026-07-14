@@ -21,6 +21,7 @@ real robots.
 
 Strategies
 ----------
+    --strategy.type=action_debug  Print one full action chunk without moving the robot
     --strategy.type=base       Autonomous rollout, no recording
     --strategy.type=sentry     Continuous recording with auto-upload
     --strategy.type=highlight  Ring buffer + keystroke save

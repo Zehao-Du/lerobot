@@ -31,6 +31,9 @@ index_or_path: "/dev/video60", width: 640, height: 480, fps: 30}}' \
 
 # /home/ubuntu/Documents/CodeField/zehao/lerobot/outputs/smolvla_pick_place/checkpoints/160000/pretrained_model
 # task="pick the pick block and place it onto the black pad"
+#
+# One-shot action inspection: run this same command with
+# --strategy.type=action_debug. It prints the full predicted chunk and sends no action.
 
 lerobot-rollout \
 --strategy.type=base \

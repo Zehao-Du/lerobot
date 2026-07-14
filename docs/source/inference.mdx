@@ -239,6 +239,28 @@ See the [Real-Time Chunking](./rtc) guide for details on tuning RTC parameters.
 
 ---
 
+## Inspect a Full Action Chunk Without Moving the Robot
+
+Use the one-shot `action_debug` strategy to capture the robot's current observation,
+run `predict_action_chunk()` once, and print every predicted action in the terminal:
+
+```bash
+lerobot-rollout \
+    --strategy.type=action_debug \
+    --policy.path=${HF_USER}/policy \
+    --robot.type=so100_follower \
+    --robot.port=/dev/ttyACM0 \
+    --robot.cameras="{ front: {type: opencv, index_or_path: 0, width: 640, height: 480, fps: 30}}" \
+    --task="Pick up the cube" \
+    --device=cuda
+```
+
+The output contains the raw model tensor and postprocessed values grouped as
+position, rotation, and gripper channels for every horizon step. This strategy never
+calls `robot.send_action()` and exits after the single prediction.
+
+---
+
 ## Common Flags
 
 | Flag                              | Description                                                       | Default |

@@ -59,6 +59,12 @@ class BaseStrategyConfig(RolloutStrategyConfig):
     pass
 
 
+@RolloutStrategyConfig.register_subclass("action_debug")
+@dataclass
+class ActionDebugStrategyConfig(RolloutStrategyConfig):
+    """Run one action-chunk prediction from the current observation without moving the robot."""
+
+
 @RolloutStrategyConfig.register_subclass("sentry")
 @dataclass
 class SentryStrategyConfig(RolloutStrategyConfig):
@@ -287,9 +293,13 @@ class RolloutConfig:
         if needs_dataset and (self.dataset is None or not self.dataset.repo_id):
             raise ValueError(f"{self.strategy.type} strategy requires --dataset.repo_id to be set")
 
-        if isinstance(self.strategy, BaseStrategyConfig) and self.dataset is not None:
+        if (
+            isinstance(self.strategy, (BaseStrategyConfig, ActionDebugStrategyConfig))
+            and self.dataset is not None
+        ):
             raise ValueError(
-                "Base strategy does not record data. Use sentry, highlight, or dagger for recording."
+                f"{self.strategy.type} strategy does not record data. "
+                "Use sentry, highlight, dagger, or episodic for recording."
             )
 
         if self.visual_prompt and self.fps > 10:

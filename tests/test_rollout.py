@@ -59,6 +59,7 @@ def test_strategies_submodule_imports():
 
 def test_strategy_config_types():
     from lerobot.rollout import (
+        ActionDebugStrategyConfig,
         BaseStrategyConfig,
         DAggerStrategyConfig,
         EpisodicStrategyConfig,
@@ -67,6 +68,7 @@ def test_strategy_config_types():
     )
 
     assert BaseStrategyConfig().type == "base"
+    assert ActionDebugStrategyConfig().type == "action_debug"
     assert SentryStrategyConfig().type == "sentry"
     assert HighlightStrategyConfig().type == "highlight"
     assert DAggerStrategyConfig().type == "dagger"
@@ -203,6 +205,8 @@ def test_thread_safe_robot_properties(tmp_path):
 
 def test_create_strategy_dispatches():
     from lerobot.rollout import (
+        ActionDebugStrategy,
+        ActionDebugStrategyConfig,
         BaseStrategy,
         BaseStrategyConfig,
         DAggerStrategy,
@@ -215,6 +219,7 @@ def test_create_strategy_dispatches():
     )
 
     assert isinstance(create_strategy(BaseStrategyConfig()), BaseStrategy)
+    assert isinstance(create_strategy(ActionDebugStrategyConfig()), ActionDebugStrategy)
     assert isinstance(create_strategy(SentryStrategyConfig()), SentryStrategy)
     assert isinstance(create_strategy(DAggerStrategyConfig()), DAggerStrategy)
     assert isinstance(create_strategy(EpisodicStrategyConfig()), EpisodicStrategy)
@@ -227,6 +232,113 @@ def test_create_strategy_unknown_raises():
     cfg.type = "bogus"
     with pytest.raises(ValueError, match="Unknown strategy type"):
         create_strategy(cfg)
+
+
+def test_format_action_chunk_debug_prints_every_action():
+    from lerobot.rollout.strategies import format_action_chunk_debug
+
+    raw = torch.tensor([[[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]])
+    processed = raw + 1
+    output = format_action_chunk_debug(
+        raw,
+        processed,
+        ["eef_x.pos", "eef_rx.pos", "gripper.pos"],
+    )
+
+    assert "predicted 2 actions" in output
+    assert "no actions sent to robot" in output
+    assert "step 00" in output
+    assert "step 01" in output
+    assert "raw: [0.1000, 0.2000, 0.3000]" in output
+    assert "pos: eef_x.pos=1.1000" in output
+    assert "rot: eef_rx.pos=1.2000" in output
+    assert "gripper: gripper.pos=1.3000" in output
+
+
+def test_action_debug_strategy_predicts_chunk_without_sending(monkeypatch, capsys):
+    from lerobot.rollout import ActionDebugStrategy, ActionDebugStrategyConfig
+    from lerobot.rollout.strategies import action_debug as action_debug_module
+
+    class FakePipeline:
+        def __init__(self, transform=None):
+            self.transform = transform or (lambda value: value)
+            self.reset_count = 0
+
+        def reset(self):
+            self.reset_count += 1
+
+        def __call__(self, value):
+            return self.transform(value)
+
+    class FakePolicy:
+        config = SimpleNamespace(use_amp=False)
+
+        def __init__(self):
+            self.reset_count = 0
+            self.observation = None
+
+        def reset(self):
+            self.reset_count += 1
+
+        def predict_action_chunk(self, observation):
+            self.observation = observation
+            return torch.tensor([[[0.1, 0.2], [0.3, 0.4]]])
+
+    class FakeRobot:
+        robot_type = "mock"
+
+        def __init__(self):
+            self.sent = []
+
+        def get_observation(self):
+            return {"x.pos": 1.0}
+
+        def send_action(self, action):
+            self.sent.append(action)
+
+    monkeypatch.setattr(
+        action_debug_module,
+        "build_dataset_frame",
+        lambda features, observation, prefix: {"observation.state": observation["x.pos"]},
+    )
+    monkeypatch.setattr(
+        action_debug_module,
+        "prepare_observation_for_inference",
+        lambda observation, device, task, robot_type: observation,
+    )
+
+    policy = FakePolicy()
+    preprocessor = FakePipeline()
+    postprocessor = FakePipeline(lambda actions: actions + 1)
+    robot = FakeRobot()
+    ctx = SimpleNamespace(
+        runtime=SimpleNamespace(
+            cfg=SimpleNamespace(device="cpu", task="inspect"),
+            visual_prompt_recolorer=None,
+        ),
+        hardware=SimpleNamespace(robot_wrapper=robot),
+        policy=SimpleNamespace(
+            policy=policy,
+            preprocessor=preprocessor,
+            postprocessor=postprocessor,
+        ),
+        processors=SimpleNamespace(robot_observation_processor=lambda observation: observation),
+        data=SimpleNamespace(
+            hw_features={},
+            ordered_action_keys=["x.pos", "gripper.pos"],
+        ),
+    )
+    strategy = ActionDebugStrategy(ActionDebugStrategyConfig())
+
+    strategy.setup(ctx)
+    strategy.run(ctx)
+
+    output = capsys.readouterr().out
+    assert "predicted 2 actions" in output
+    assert "step 00" in output
+    assert "step 01" in output
+    assert policy.observation["task"] == ["inspect"]
+    assert robot.sent == []
 
 
 # ---------------------------------------------------------------------------
