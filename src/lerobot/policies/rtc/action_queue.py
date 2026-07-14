@@ -79,6 +79,29 @@ class ActionQueue:
             self.last_index += 1
             return action.clone()
 
+    def get_with_channel_lookahead(
+        self,
+        channel_indices: list[int],
+        lookahead_steps: int,
+    ) -> Tensor | None:
+        """Consume one action while taking selected channels from a future action."""
+        if lookahead_steps < 0:
+            raise ValueError(f"lookahead_steps must be >= 0, got {lookahead_steps}")
+        with self.lock:
+            if self.queue is None or self.last_index >= len(self.queue):
+                return None
+
+            action = self.queue[self.last_index].clone()
+            lookahead_index = min(self.last_index + lookahead_steps, len(self.queue) - 1)
+            for channel_index in channel_indices:
+                if not 0 <= channel_index < action.shape[0]:
+                    raise IndexError(
+                        f"Channel index {channel_index} is outside action dimension {action.shape[0]}"
+                    )
+                action[channel_index] = self.queue[lookahead_index, channel_index]
+            self.last_index += 1
+            return action
+
     def clear(self) -> None:
         """Clear queued actions and reset consumption index."""
         with self.lock:

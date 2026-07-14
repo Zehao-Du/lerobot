@@ -77,12 +77,15 @@ class RTCInferenceConfig(InferenceEngineConfig):
     # but the RTC queue advances only once per interval.
     action_interval_s: float | None = None
     action_replan_interval: int = 1
+    gripper_lookahead_steps: int = 0
 
     def __post_init__(self) -> None:
         if self.action_interval_s is not None and self.action_interval_s <= 0:
             raise ValueError(f"action_interval_s must be > 0, got {self.action_interval_s}")
         if self.action_replan_interval <= 0:
             raise ValueError(f"action_replan_interval must be > 0, got {self.action_replan_interval}")
+        if self.gripper_lookahead_steps < 0:
+            raise ValueError(f"gripper_lookahead_steps must be >= 0, got {self.gripper_lookahead_steps}")
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +126,11 @@ def create_inference_engine(
             visual_prompt_recolorer=visual_prompt_recolorer,
         )
     if isinstance(config, RTCInferenceConfig):
+        gripper_action_indices = [
+            index for index, key in enumerate(ordered_action_keys) if "gripper" in key.lower()
+        ]
+        if config.gripper_lookahead_steps > 0 and not gripper_action_indices:
+            raise ValueError("gripper_lookahead_steps requires at least one action key containing 'gripper'.")
         return RTCInferenceEngine(
             policy=policy,
             preprocessor=preprocessor,
@@ -138,6 +146,8 @@ def create_inference_engine(
             rtc_queue_threshold=config.queue_threshold,
             action_interval_s=config.action_interval_s,
             action_replan_interval=config.action_replan_interval,
+            gripper_lookahead_steps=config.gripper_lookahead_steps,
+            gripper_action_indices=gripper_action_indices,
             shutdown_event=shutdown_event,
             visual_prompt_recolorer=visual_prompt_recolorer,
         )

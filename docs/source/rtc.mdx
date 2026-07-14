@@ -121,6 +121,7 @@ lerobot-rollout \
     --inference.type=rtc \
     --inference.action_interval_s=0.56 \
     --inference.action_replan_interval=1 \
+    --inference.gripper_lookahead_steps=0 \
     --inference.rtc.execution_horizon=3 \
     --fps=30
 ```
@@ -139,6 +140,27 @@ inference_delay = ceil(inference_latency / action_interval_s)
 `action_replan_interval=1` refreshes the chunk after every dispatched action. Since
 `execution_horizon` is measured in these slower action steps, start with a small
 value such as 2–4.
+
+For robots whose gripper closes later than the arm motion, set
+`gripper_lookahead_steps` to use the gripper channel from a future queued action
+while keeping the current arm action. For example, at `action_interval_s=0.13`,
+two steps lead the gripper by about 260 ms:
+
+```bash
+--inference.gripper_lookahead_steps=2
+```
+
+RealMan/Pika can additionally enable the Pika-DP table collision rule:
+
+```bash
+--robot.table_collision_enabled=true \
+--robot.table_height_m=0.23
+```
+
+The guard transforms the absolute RealMan target into the Pika gripper/world frame,
+checks all four finger corners using the current gripper width and 25.5 mm finger
+thickness, and lifts the target so its lowest corner stays above the configured table
+height. Verify the measured table height before enabling this on hardware.
 
 ## Testing RTC Offline
 

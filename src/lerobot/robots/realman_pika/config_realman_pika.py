@@ -23,7 +23,6 @@ from lerobot.cameras.realsense import RealSenseCameraConfig
 
 from ..config import RobotConfig
 
-
 DEFAULT_REALMAN_IP = "192.168.1.18"
 DEFAULT_REALMAN_PORT = 8080
 DEFAULT_GRIPPER_SERIAL_PORT = "/dev/ttyUSB60"
@@ -99,6 +98,12 @@ class RealmanPikaConfig(RobotConfig):
     max_relative_pos: float = 0.03
     max_relative_rot: float = 0.15
 
+    # Pika-DP-style finger/table collision protection. Disabled by default so
+    # existing deployments must opt in with a measured world-frame table height.
+    table_collision_enabled: bool = False
+    table_height_m: float = 0.23
+    gripper_finger_thickness_m: float = 0.0255
+
     action_latency: float = 0.1
     robot_action_latency: float | None = None
     gripper_action_latency: float | None = None
@@ -125,6 +130,10 @@ class RealmanPikaConfig(RobotConfig):
             raise ValueError(f"max_relative_pos must be > 0, got {self.max_relative_pos}.")
         if self.max_relative_rot <= 0:
             raise ValueError(f"max_relative_rot must be > 0, got {self.max_relative_rot}.")
+        if self.gripper_finger_thickness_m <= 0:
+            raise ValueError(
+                f"gripper_finger_thickness_m must be > 0, got {self.gripper_finger_thickness_m}."
+            )
         if self.robot_action_latency is None:
             self.robot_action_latency = self.action_latency
         if self.gripper_action_latency is None:

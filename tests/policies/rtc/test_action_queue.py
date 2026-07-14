@@ -136,6 +136,27 @@ def test_get_increments_last_index(action_queue_rtc_enabled, sample_actions):
     assert action_queue_rtc_enabled.last_index == 2
 
 
+def test_get_with_channel_lookahead_advances_arm_and_leads_gripper(action_queue_rtc_enabled):
+    actions = torch.tensor(
+        [
+            [0.0, 10.0, 100.0],
+            [1.0, 11.0, 101.0],
+            [2.0, 12.0, 102.0],
+            [3.0, 13.0, 103.0],
+        ]
+    )
+    action_queue_rtc_enabled.merge(actions, actions, real_delay=0)
+
+    first = action_queue_rtc_enabled.get_with_channel_lookahead([2], lookahead_steps=2)
+    second = action_queue_rtc_enabled.get_with_channel_lookahead([2], lookahead_steps=2)
+    third = action_queue_rtc_enabled.get_with_channel_lookahead([2], lookahead_steps=2)
+
+    assert torch.equal(first, torch.tensor([0.0, 10.0, 102.0]))
+    assert torch.equal(second, torch.tensor([1.0, 11.0, 103.0]))
+    assert torch.equal(third, torch.tensor([2.0, 12.0, 103.0]))
+    assert action_queue_rtc_enabled.last_index == 3
+
+
 # qsize() tests
 
 

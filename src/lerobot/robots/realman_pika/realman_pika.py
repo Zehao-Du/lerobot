@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
 import logging
 import time
 from functools import cached_property
@@ -24,13 +25,16 @@ import numpy as np
 from lerobot.cameras import make_cameras_from_configs
 from lerobot.types import RobotAction, RobotObservation
 from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
+from lerobot.utils.rotation import Rotation
 
 from ..robot import Robot
 from .config_realman_pika import RealmanPikaConfig
 from .controllers import PikaController, RealmanInterpolationController
 from .transforms import (
     apply_realman_tcp_relative_pose,
+    pika_gripper_pose_to_realman_tcp_pose,
     pika_relative_pose_to_realman_tcp_relative_pose,
+    realman_tcp_pose_to_pika_gripper_pose,
     realman_tcp_relative_pose_between,
     realman_tcp_relative_pose_to_pika_relative_pose,
 )
@@ -45,6 +49,29 @@ EEF_RY = "eef_ry.pos"
 EEF_RZ = "eef_rz.pos"
 GRIPPER = "gripper.pos"
 STATE_ACTION_KEYS = (EEF_X, EEF_Y, EEF_Z, EEF_RX, EEF_RY, EEF_RZ, GRIPPER)
+
+
+def _lift_pika_gripper_above_table(
+    pika_gripper_pose: np.ndarray,
+    gripper_width: float,
+    table_height: float,
+    finger_thickness: float,
+) -> tuple[np.ndarray, float]:
+    """Lift a Pika gripper pose until all four finger corners clear the table."""
+    pose = np.asarray(pika_gripper_pose, dtype=np.float64).copy()
+    keypoints = np.array(
+        [
+            [dx * gripper_width / 2.0, dy * finger_thickness / 2.0, 0.0]
+            for dx in (-1.0, 1.0)
+            for dy in (-1.0, 1.0)
+        ],
+        dtype=np.float64,
+    )
+    rotation = Rotation.from_rotvec(pose[3:6]).as_matrix()
+    transformed_keypoints = (rotation @ keypoints.T).T + pose[:3]
+    lift = max(float(table_height - np.min(transformed_keypoints[:, 2])), 0.0)
+    pose[2] += lift
+    return pose, lift
 
 
 def _as_latest_float(value: Any) -> float:
@@ -78,7 +105,7 @@ class RealmanPika(Robot):
 
     @cached_property
     def _state_features(self) -> dict[str, type]:
-        return {key: float for key in STATE_ACTION_KEYS}
+        return dict.fromkeys(STATE_ACTION_KEYS, float)
 
     @cached_property
     def _camera_features(self) -> dict[str, tuple[int, int, int]]:
@@ -224,6 +251,26 @@ class RealmanPika(Robot):
         realman_relative_pose = pika_relative_pose_to_realman_tcp_relative_pose(target[:6])
         realman_target_pose = apply_realman_tcp_relative_pose(current_realman_tcp_pose, realman_relative_pose)
 
+        if self.config.table_collision_enabled:
+            pika_target_pose = realman_tcp_pose_to_pika_gripper_pose(realman_target_pose)
+            pika_target_pose, lift = _lift_pika_gripper_above_table(
+                pika_target_pose,
+                gripper_width=float(target[6]),
+                table_height=self.config.table_height_m,
+                finger_thickness=self.config.gripper_finger_thickness_m,
+            )
+            if lift > 0:
+                realman_target_pose = pika_gripper_pose_to_realman_tcp_pose(pika_target_pose)
+                corrected_realman_relative = realman_tcp_relative_pose_between(
+                    current_realman_tcp_pose, realman_target_pose
+                )
+                target[:6] = realman_tcp_relative_pose_to_pika_relative_pose(corrected_realman_relative)
+                logger.warning(
+                    "Table collision guard lifted Pika gripper target by %.4fm (table_height=%.4fm)",
+                    lift,
+                    self.config.table_height_m,
+                )
+
         now = time.time()
         self.arm.schedule_waypoint(
             realman_target_pose, target_time=now + float(self.config.robot_action_latency)
@@ -236,16 +283,12 @@ class RealmanPika(Robot):
     def _disconnect_best_effort(self) -> None:
         for controller in (self.gripper, self.arm):
             if controller is not None:
-                try:
+                with contextlib.suppress(Exception):
                     controller.stop(wait=True)
-                except Exception:  # nosec B110
-                    pass
         for cam in self.cameras.values():
-            try:
+            with contextlib.suppress(Exception):
                 if cam.is_connected:
                     cam.disconnect()
-            except Exception:  # nosec B110
-                pass
         self.arm = None
         self.gripper = None
         self._reference_realman_tcp_pose = None

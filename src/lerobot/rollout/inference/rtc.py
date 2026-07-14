@@ -112,6 +112,8 @@ class RTCInferenceEngine(InferenceEngine):
         rtc_queue_threshold: int = 30,
         action_interval_s: float | None = None,
         action_replan_interval: int = 1,
+        gripper_lookahead_steps: int = 0,
+        gripper_action_indices: list[int] | None = None,
         shutdown_event: Event | None = None,
         visual_prompt_recolorer: Sam3PinkBlockRecolorer | None = None,
     ) -> None:
@@ -129,6 +131,8 @@ class RTCInferenceEngine(InferenceEngine):
         self._rtc_queue_threshold = rtc_queue_threshold
         self._action_interval_s = action_interval_s
         self._action_replan_interval = action_replan_interval
+        self._gripper_lookahead_steps = gripper_lookahead_steps
+        self._gripper_action_indices = gripper_action_indices or []
         self._visual_prompt_recolorer = visual_prompt_recolorer
 
         self._action_queue: ActionQueue | None = None
@@ -158,6 +162,12 @@ class RTCInferenceEngine(InferenceEngine):
                 "RTC timed action playback enabled (interval=%.3fs, replan every %d action(s))",
                 action_interval_s,
                 action_replan_interval,
+            )
+        if gripper_lookahead_steps > 0:
+            logger.info(
+                "RTC gripper lookahead enabled (steps=%d, channels=%s)",
+                gripper_lookahead_steps,
+                self._gripper_action_indices,
             )
 
         # Processor introspection for relative-action re-anchoring.
@@ -264,7 +274,7 @@ class RTCInferenceEngine(InferenceEngine):
         if self._action_queue is None:
             return None
         if self._action_interval_s is None:
-            return self._action_queue.get()
+            return self._get_queued_action()
 
         with self._dispatch_lock:
             now = time.perf_counter()
@@ -273,11 +283,21 @@ class RTCInferenceEngine(InferenceEngine):
                 and now - self._last_action_dispatch_time < self._action_interval_s
             ):
                 return None
-            action = self._action_queue.get()
+            action = self._get_queued_action()
             if action is not None:
                 self._last_action_dispatch_time = now
                 self._action_dispatch_count += 1
             return action
+
+    def _get_queued_action(self) -> torch.Tensor | None:
+        if self._action_queue is None:
+            return None
+        if self._gripper_lookahead_steps <= 0:
+            return self._action_queue.get()
+        return self._action_queue.get_with_channel_lookahead(
+            self._gripper_action_indices,
+            self._gripper_lookahead_steps,
+        )
 
     def notify_observation(self, obs: dict) -> None:
         """Publish the latest observation for the RTC thread to consume."""

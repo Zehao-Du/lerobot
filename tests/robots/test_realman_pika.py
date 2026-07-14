@@ -8,13 +8,17 @@ import pytest
 import lerobot.robots.realman_pika.realman_pika as realman_pika_module
 from lerobot.robots.realman_pika.config_realman_pika import RealmanPikaConfig
 from lerobot.robots.realman_pika.controllers import _pop_latest_due_waypoint
-from lerobot.robots.realman_pika.realman_pika import STATE_ACTION_KEYS, RealmanPika
+from lerobot.robots.realman_pika.realman_pika import (
+    STATE_ACTION_KEYS,
+    RealmanPika,
+    _lift_pika_gripper_above_table,
+)
 from lerobot.robots.realman_pika.transforms import (
     apply_realman_tcp_relative_pose,
     pika_gripper_pose_to_realman_tcp_pose,
     pika_relative_pose_to_realman_tcp_relative_pose,
-    realman_tcp_relative_pose_to_pika_relative_pose,
     realman_tcp_pose_to_pika_gripper_pose,
+    realman_tcp_relative_pose_to_pika_relative_pose,
 )
 from lerobot.scripts import lerobot_realman_pika_test as hardware_test_module
 
@@ -118,6 +122,20 @@ def test_realman_pika_relative_pose_roundtrip():
     np.testing.assert_allclose(recovered, relative, atol=1e-8)
 
 
+def test_pika_table_guard_accounts_for_finger_orientation():
+    pose = np.array([0.0, 0.0, 0.22, np.pi / 2.0, 0.0, 0.0], dtype=np.float64)
+
+    lifted, delta = _lift_pika_gripper_above_table(
+        pose,
+        gripper_width=0.04,
+        table_height=0.23,
+        finger_thickness=0.0255,
+    )
+
+    assert delta == pytest.approx(0.02275)
+    assert lifted[2] == pytest.approx(0.24275)
+
+
 def test_send_action_clips_and_schedules(monkeypatch, tmp_path):
     _patch_fakes(monkeypatch)
     cfg = RealmanPikaConfig(
@@ -157,6 +175,34 @@ def test_send_action_clips_and_schedules(monkeypatch, tmp_path):
     assert before + cfg.action_latency <= arm.scheduled[0][1] <= after + cfg.action_latency
     assert before + cfg.action_latency <= gripper.scheduled[0][1] <= after + cfg.action_latency
 
+    robot.disconnect()
+
+
+def test_send_action_lifts_gripper_target_above_table(monkeypatch, tmp_path):
+    _patch_fakes(monkeypatch)
+    cfg = RealmanPikaConfig(
+        calibration_dir=tmp_path,
+        table_collision_enabled=True,
+        table_height_m=0.23,
+        max_relative_pos=0.3,
+    )
+    robot = RealmanPika(cfg)
+    robot.connect()
+
+    action = dict.fromkeys(STATE_ACTION_KEYS, 0.0)
+    action["gripper.pos"] = 0.04
+    sent = robot.send_action(action)
+
+    arm_target = FakeArm.instances[-1].scheduled[-1][0]
+    pika_target = realman_tcp_pose_to_pika_gripper_pose(arm_target)
+    _, remaining_lift = _lift_pika_gripper_above_table(
+        pika_target,
+        gripper_width=0.04,
+        table_height=0.23,
+        finger_thickness=cfg.gripper_finger_thickness_m,
+    )
+    assert remaining_lift == pytest.approx(0.0, abs=1e-9)
+    assert np.linalg.norm([sent[key] for key in STATE_ACTION_KEYS[:3]]) > 0
     robot.disconnect()
 
 

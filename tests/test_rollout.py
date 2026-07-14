@@ -253,6 +253,29 @@ def test_create_inference_engine_sync():
     assert isinstance(engine, SyncInferenceEngine)
 
 
+def test_create_rtc_engine_resolves_gripper_lookahead_channel():
+    from lerobot.rollout import RTCInferenceConfig, RTCInferenceEngine, create_inference_engine
+
+    pipeline = MagicMock()
+    pipeline.steps = []
+    engine = create_inference_engine(
+        RTCInferenceConfig(gripper_lookahead_steps=2),
+        policy=MagicMock(),
+        preprocessor=pipeline,
+        postprocessor=pipeline,
+        robot_wrapper=MagicMock(robot_type="mock", action_features={}),
+        hw_features={},
+        dataset_features={},
+        ordered_action_keys=["eef_x.pos", "eef_y.pos", "gripper.pos"],
+        task="test",
+        fps=30.0,
+        device="cpu",
+    )
+
+    assert isinstance(engine, RTCInferenceEngine)
+    assert engine._gripper_action_indices == [2]
+
+
 def test_rtc_inference_config_validates_timed_playback():
     from lerobot.rollout import RTCInferenceConfig
 
@@ -263,6 +286,8 @@ def test_rtc_inference_config_validates_timed_playback():
         RTCInferenceConfig(action_interval_s=0)
     with pytest.raises(ValueError, match="action_replan_interval must be > 0"):
         RTCInferenceConfig(action_replan_interval=0)
+    with pytest.raises(ValueError, match="gripper_lookahead_steps must be >= 0"):
+        RTCInferenceConfig(gripper_lookahead_steps=-1)
 
 
 def test_rtc_engine_paces_action_queue(monkeypatch):
@@ -297,6 +322,39 @@ def test_rtc_engine_paces_action_queue(monkeypatch):
     assert engine.get_action(None) is None
     clock[0] += 0.01
     assert torch.equal(engine.get_action(None), actions[1])
+
+
+def test_rtc_engine_uses_future_gripper_channel():
+    from lerobot.policies.rtc import RTCConfig
+    from lerobot.policies.rtc.action_queue import ActionQueue
+    from lerobot.rollout import RTCInferenceEngine
+
+    pipeline = MagicMock()
+    pipeline.steps = []
+    engine = RTCInferenceEngine(
+        policy=MagicMock(),
+        preprocessor=pipeline,
+        postprocessor=pipeline,
+        robot_wrapper=MagicMock(robot_type="mock", action_features={}),
+        rtc_config=RTCConfig(),
+        hw_features={},
+        task="test",
+        fps=30,
+        device="cpu",
+        gripper_lookahead_steps=2,
+        gripper_action_indices=[2],
+    )
+    engine._action_queue = ActionQueue(RTCConfig())
+    actions = torch.tensor(
+        [
+            [0.0, 10.0, 100.0],
+            [1.0, 11.0, 101.0],
+            [2.0, 12.0, 102.0],
+        ]
+    )
+    engine._action_queue.merge(actions, actions, real_delay=0)
+
+    assert torch.equal(engine.get_action(None), torch.tensor([0.0, 10.0, 102.0]))
 
 
 def test_rtc_timed_playback_converts_latency_to_action_steps():
