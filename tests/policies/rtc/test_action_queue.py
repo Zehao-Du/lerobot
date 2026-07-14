@@ -461,6 +461,28 @@ def test_merge_validates_delay_consistency(action_queue_rtc_enabled, sample_acti
     assert "Indexes diff is not equal to real delay" in caplog.text
 
 
+def test_merge_can_use_actual_consumed_delay(action_queue_rtc_enabled, sample_actions, caplog):
+    """Timed playback aligns merge to actions actually consumed during inference."""
+    import logging
+
+    caplog.set_level(logging.WARNING)
+    action_queue_rtc_enabled.merge(sample_actions["short"], sample_actions["short"], real_delay=0)
+    inference_start_index = action_queue_rtc_enabled.get_action_index()
+    action_queue_rtc_enabled.get()
+
+    delay = action_queue_rtc_enabled.merge(
+        sample_actions["original"],
+        sample_actions["processed"],
+        real_delay=2,
+        action_index_before_inference=inference_start_index,
+        use_actual_index_delay=True,
+    )
+
+    assert delay == 1
+    assert action_queue_rtc_enabled.qsize() == len(sample_actions["processed"]) - 1
+    assert "Indexes diff is not equal to real delay" not in caplog.text
+
+
 def test_merge_no_warning_when_delays_match(action_queue_rtc_enabled, sample_actions, caplog):
     """Test merge() doesn't warn when delays are consistent."""
     import logging

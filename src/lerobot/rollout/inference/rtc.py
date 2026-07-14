@@ -377,7 +377,13 @@ class RTCInferenceEngine(InferenceEngine):
                         else:
                             latency_tracker.add(new_latency)
 
-                        queue.merge(original, processed, new_delay, idx_before)
+                        merge_delay = queue.merge(
+                            original,
+                            processed,
+                            new_delay,
+                            idx_before,
+                            use_actual_index_delay=self._action_interval_s is not None,
+                        )
                         if self._action_interval_s is not None:
                             with self._dispatch_lock:
                                 self._last_inference_dispatch_count = self._action_dispatch_count
@@ -393,7 +399,7 @@ class RTCInferenceEngine(InferenceEngine):
                         logger.debug(
                             "RTC inference latency=%.2fs, delay=%d, queue=%d",
                             new_latency,
-                            new_delay,
+                            merge_delay,
                             queue.qsize(),
                         )
 

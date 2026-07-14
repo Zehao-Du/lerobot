@@ -150,7 +150,8 @@ class ActionQueue:
         processed_actions: Tensor,
         real_delay: int,
         action_index_before_inference: int | None = None,
-    ):
+        use_actual_index_delay: bool = False,
+    ) -> int:
         """Merge new actions into the queue.
 
         This method operates differently based on RTC mode:
@@ -162,15 +163,25 @@ class ActionQueue:
             processed_actions: Post-processed actions for robot (time_steps, action_dim).
             real_delay: Number of time steps of inference delay.
             action_index_before_inference: Index before inference started, for validation.
+            use_actual_index_delay: Use the number of actions actually consumed during
+                inference instead of the wall-clock delay estimate.
+
+        Returns:
+            int: The delay used to merge the new chunk.
         """
         with self.lock:
-            delay = self._check_and_resolve_delays(real_delay, action_index_before_inference)
+            delay = self._check_and_resolve_delays(
+                real_delay,
+                action_index_before_inference,
+                use_actual_index_delay=use_actual_index_delay,
+            )
 
             if self.cfg.enabled:
                 self._replace_actions_queue(original_actions, processed_actions, delay)
-                return
+                return delay
 
             self._append_actions_queue(original_actions, processed_actions)
+            return delay
 
     def _replace_actions_queue(self, original_actions: Tensor, processed_actions: Tensor, real_delay: int):
         """Replace the queue with new actions (RTC mode).
@@ -217,7 +228,10 @@ class ActionQueue:
         self.last_index = 0
 
     def _check_and_resolve_delays(
-        self, real_delay: int, action_index_before_inference: int | None = None
+        self,
+        real_delay: int,
+        action_index_before_inference: int | None = None,
+        use_actual_index_delay: bool = False,
     ) -> int:
         """Validate that computed delays match expectations.
 
@@ -227,6 +241,7 @@ class ActionQueue:
         Args:
             real_delay: Delay computed from inference latency.
             action_index_before_inference: Action index when inference started.
+            use_actual_index_delay: Prefer the actual index difference when available.
 
         Returns:
             int: Delay to use.
@@ -235,6 +250,14 @@ class ActionQueue:
 
         if action_index_before_inference is not None:
             indexes_diff = max(0, self.last_index - action_index_before_inference)
+            if use_actual_index_delay:
+                if indexes_diff != real_delay:
+                    logger.debug(
+                        "Using actual action delay instead of estimate. indexes_diff=%d, real_delay=%d",
+                        indexes_diff,
+                        real_delay,
+                    )
+                return indexes_diff
             if indexes_diff != real_delay:
                 logger.warning(
                     "Indexes diff is not equal to real delay. indexes_diff=%d, real_delay=%d",
