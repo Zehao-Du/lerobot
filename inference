@@ -14,8 +14,6 @@ index_or_path: "/dev/video60", width: 640, height: 480, fps: 30}}' \
 --inference.action_replan_interval=1 \
 --inference.gripper_lookahead_steps=2 \
 --fps=30 \
---robot.max_relative_pos=0.005 \
---robot.max_relative_rot=0.01 \
 --robot.table_collision_enabled=true \
 --robot.table_height_m=0.23 \
 --robot.robot_action_latency=0.03 \
