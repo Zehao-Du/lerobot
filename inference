@@ -10,11 +10,9 @@ lerobot-rollout \
 index_or_path: "/dev/video60", width: 640, height: 480, fps: 30}}' \
 --inference.type=rtc \
 --inference.rtc.execution_horizon=3 \
---inference.action_interval_s=0.56 \
+--inference.action_interval_s=0.8 \
 --inference.action_replan_interval=1 \
 --fps=30 \
---robot.max_relative_pos=0.005 \
---robot.max_relative_rot=0.01 \
 --robot.robot_action_latency=0.03 \
 --robot.gripper_action_latency=0.0 \
 --robot.max_pos_speed=0.01 \
