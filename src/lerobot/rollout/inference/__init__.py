@@ -20,17 +20,21 @@ rollout strategies never branch on which backend is in use.
 
 from .base import InferenceEngine
 from .factory import (
+    HumanInLoopInferenceConfig,
     InferenceEngineConfig,
     RTCInferenceConfig,
     SyncInferenceConfig,
     create_inference_engine,
 )
+from .human_in_loop import HumanInLoopInferenceEngine
 from .rtc import RTCInferenceEngine
 from .sync import SyncInferenceEngine
 
 __all__ = [
     "InferenceEngine",
     "InferenceEngineConfig",
+    "HumanInLoopInferenceConfig",
+    "HumanInLoopInferenceEngine",
     "RTCInferenceConfig",
     "RTCInferenceEngine",
     "SyncInferenceConfig",

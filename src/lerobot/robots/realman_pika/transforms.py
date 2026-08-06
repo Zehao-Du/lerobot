@@ -21,30 +21,13 @@ import numpy as np
 from lerobot.utils.rotation import Rotation
 
 
-def _rot_y(theta: float) -> np.ndarray:
-    c = math.cos(theta)
-    s = math.sin(theta)
-    return np.array(
-        [
-            [c, 0.0, s],
-            [0.0, 1.0, 0.0],
-            [-s, 0.0, c],
-        ],
-        dtype=np.float64,
-    )
-
-
-def _rot_z(theta: float) -> np.ndarray:
-    c = math.cos(theta)
-    s = math.sin(theta)
-    return np.array(
-        [
-            [c, -s, 0.0],
-            [s, c, 0.0],
-            [0.0, 0.0, 1.0],
-        ],
-        dtype=np.float64,
-    )
+# =================== RealMan/Pika Frame Calibration (Edit Here) =================== #
+# Pika gripper origin expressed in the RealMan TCP frame.
+# Translation is in millimeters. Rotation values are [x, y, z] in degrees,
+# applied as fixed-axis (extrinsic) rotations in Y-X-Z order.
+PIKA_GRIPPER_TRANSLATION_IN_REALMAN_TCP_MM = np.array([0.0, 0.0, 5.0], dtype=np.float64)
+PIKA_GRIPPER_ROTATION_IN_REALMAN_TCP_DEG = np.array([0.0, -90.0, 180.0], dtype=np.float64)
+# =================== End RealMan/Pika Frame Calibration ============================ #
 
 
 def _make_transform(rot: np.ndarray, trans: np.ndarray | None = None) -> np.ndarray:
@@ -68,6 +51,18 @@ def _euler_xyz_to_mat(euler: np.ndarray) -> np.ndarray:
         ],
         dtype=np.float64,
     )
+
+
+def _extrinsic_yxz_to_mat(euler_xyz: np.ndarray) -> np.ndarray:
+    """Convert [rx, ry, rz] using fixed-axis rotations in Y-X-Z order."""
+    rx, ry, rz = euler_xyz
+    cx, sx = math.cos(rx), math.sin(rx)
+    cy, sy = math.cos(ry), math.sin(ry)
+    cz, sz = math.cos(rz), math.sin(rz)
+    rot_x = np.array([[1.0, 0.0, 0.0], [0.0, cx, -sx], [0.0, sx, cx]], dtype=np.float64)
+    rot_y = np.array([[cy, 0.0, sy], [0.0, 1.0, 0.0], [-sy, 0.0, cy]], dtype=np.float64)
+    rot_z = np.array([[cz, -sz, 0.0], [sz, cz, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64)
+    return rot_z @ rot_x @ rot_y
 
 
 def _mat_to_euler_xyz(rot: np.ndarray) -> np.ndarray:
@@ -123,8 +118,10 @@ def mat_to_rotvec_pose(mat: np.ndarray) -> np.ndarray:
     return pose
 
 
-# Fixed frame transform from RealMan TCP to the Pika gripper frame.
-T_REALMAN_TCP_PIKA_GRIPPER = _make_transform(_rot_z(math.pi / 2.0) @ _rot_y(-math.pi / 2.0))
+T_REALMAN_TCP_PIKA_GRIPPER = _make_transform(
+    _extrinsic_yxz_to_mat(np.deg2rad(PIKA_GRIPPER_ROTATION_IN_REALMAN_TCP_DEG)),
+    PIKA_GRIPPER_TRANSLATION_IN_REALMAN_TCP_MM / 1000.0,
+)
 if not np.allclose(T_REALMAN_TCP_PIKA_GRIPPER[:3, 0], [0.0, 0.0, 1.0], atol=1e-9):
     raise RuntimeError("Pika gripper x-axis must align with RealMan TCP +z-axis.")
 T_PIKA_GRIPPER_REALMAN_TCP = np.linalg.inv(T_REALMAN_TCP_PIKA_GRIPPER)

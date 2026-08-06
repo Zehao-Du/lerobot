@@ -1,3 +1,4 @@
+import queue
 import time
 from collections import deque
 from types import SimpleNamespace
@@ -7,13 +8,18 @@ import pytest
 
 import lerobot.robots.realman_pika.realman_pika as realman_pika_module
 from lerobot.robots.realman_pika.config_realman_pika import RealmanPikaConfig
-from lerobot.robots.realman_pika.controllers import _pop_latest_due_waypoint
+from lerobot.robots.realman_pika.controllers import (
+    RealmanInterpolationController,
+    _pop_latest_due_waypoint,
+    _put_latest_nowait,
+)
 from lerobot.robots.realman_pika.realman_pika import (
     STATE_ACTION_KEYS,
     RealmanPika,
     _lift_pika_gripper_above_table,
 )
 from lerobot.robots.realman_pika.transforms import (
+    T_REALMAN_TCP_PIKA_GRIPPER,
     apply_realman_tcp_relative_pose,
     pika_gripper_pose_to_realman_tcp_pose,
     pika_relative_pose_to_realman_tcp_relative_pose,
@@ -114,6 +120,81 @@ def test_realman_pika_pose_roundtrip():
     np.testing.assert_allclose(recovered, pose, atol=1e-8)
 
 
+def test_realman_pika_fixed_frame_transform():
+    expected = np.array(
+        [
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, -1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0, 0.005],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+
+    np.testing.assert_allclose(T_REALMAN_TCP_PIKA_GRIPPER, expected, atol=1e-9)
+
+
+def test_realman_controller_defaults_match_stable_streaming_setup():
+    cfg = RealmanPikaConfig()
+
+    assert cfg.robot_command_frequency == 200
+    assert cfg.robot_canfd_follow is False
+    assert cfg.robot_canfd_trajectory_mode == 0
+    assert cfg.robot_canfd_radio == 0
+    assert cfg.robot_max_consecutive_command_failures == 10
+
+
+def test_realman_canfd_command_uses_configured_streaming_parameters():
+    calls = []
+
+    class FakeRobot:
+        def rm_movep_canfd(self, pose, *, follow, trajectory_mode, radio):
+            calls.append((pose, follow, trajectory_mode, radio))
+            return 0
+
+    controller = SimpleNamespace(
+        command_mode="movep_canfd",
+        canfd_follow=False,
+        canfd_trajectory_mode=2,
+        canfd_radio=150,
+    )
+    pose = np.arange(6, dtype=np.float64)
+
+    result = RealmanInterpolationController._send_pose_command(controller, FakeRobot(), pose)
+
+    assert result == 0
+    assert calls == [(pose.tolist(), False, 2, 150)]
+
+
+def test_full_state_queue_race_drops_telemetry_without_raising():
+    class RacingFullQueue:
+        def __init__(self):
+            self.put_calls = 0
+
+        def put_nowait(self, _state):
+            self.put_calls += 1
+            raise queue.Full
+
+        def get_nowait(self):
+            return {"old": True}
+
+    state_queue = RacingFullQueue()
+
+    assert _put_latest_nowait(state_queue, {"new": True}) is False
+    assert state_queue.put_calls == 2
+
+
+def test_full_state_queue_feeder_race_drops_sample_without_raising():
+    class FeederRaceQueue:
+        def put_nowait(self, _state):
+            raise queue.Full
+
+        def get_nowait(self):
+            raise queue.Empty
+
+    assert _put_latest_nowait(FeederRaceQueue(), {"new": True}) is False
+
+
 def test_realman_pika_relative_pose_roundtrip():
     relative = np.array([0.02, -0.01, 0.03, 0.04, -0.02, 0.01], dtype=np.float64)
     pika_relative = realman_tcp_relative_pose_to_pika_relative_pose(relative)
@@ -175,6 +256,72 @@ def test_send_action_clips_and_schedules(monkeypatch, tmp_path):
     assert before + cfg.action_latency <= arm.scheduled[0][1] <= after + cfg.action_latency
     assert before + cfg.action_latency <= gripper.scheduled[0][1] <= after + cfg.action_latency
 
+    robot.disconnect()
+
+
+def test_frozen_action_reference_is_shared_until_cleared(monkeypatch, tmp_path):
+    _patch_fakes(monkeypatch)
+    robot = RealmanPika(
+        RealmanPikaConfig(calibration_dir=tmp_path, max_relative_pos=0.3, max_relative_rot=1.0)
+    )
+    robot.connect()
+    arm = FakeArm.instances[-1]
+    robot.set_action_reference_to_current_pose()
+
+    first = dict.fromkeys(STATE_ACTION_KEYS, 0.0)
+    first["eef_x.pos"] = 0.1
+    first["gripper.pos"] = 0.04
+    robot.send_action(first)
+    first_target = arm.scheduled[-1][0].copy()
+
+    # Simulate the arm reaching step 1, then select another action from the
+    # same chunk. Step 2 must still be based on the original frozen TCP pose.
+    arm.pose = first_target.copy()
+    second = dict.fromkeys(STATE_ACTION_KEYS, 0.0)
+    second["eef_x.pos"] = 0.2
+    second["gripper.pos"] = 0.04
+    robot.send_action(second)
+    expected_from_frozen_reference = apply_realman_tcp_relative_pose(
+        np.zeros(6), pika_relative_pose_to_realman_tcp_relative_pose(np.array([0.2, 0, 0, 0, 0, 0]))
+    )
+    np.testing.assert_allclose(arm.scheduled[-1][0], expected_from_frozen_reference)
+
+    # Clearing restores the normal cumulative/current-relative behavior.
+    robot.clear_action_reference()
+    robot.send_action(first)
+    expected_from_current = apply_realman_tcp_relative_pose(
+        arm.pose, pika_relative_pose_to_realman_tcp_relative_pose(np.array([0.1, 0, 0, 0, 0, 0]))
+    )
+    np.testing.assert_allclose(arm.scheduled[-1][0], expected_from_current)
+    robot.disconnect()
+
+
+def test_action_reference_uses_inference_state_snapshot(monkeypatch, tmp_path):
+    _patch_fakes(monkeypatch)
+    robot = RealmanPika(
+        RealmanPikaConfig(calibration_dir=tmp_path, max_relative_pos=0.3, max_relative_rot=1.0)
+    )
+    robot.connect()
+    arm = FakeArm.instances[-1]
+
+    inference_state = np.array([0.15, -0.02, 0.01, 0.0, 0.0, 0.0, 0.04])
+    robot.set_action_reference_from_state(inference_state)
+
+    # A later hardware pose must not replace the snapshot used by the model.
+    arm.pose = np.array([0.8, 0.7, 0.6, 0.0, 0.0, 0.0])
+    action = dict.fromkeys(STATE_ACTION_KEYS, 0.0)
+    action["eef_x.pos"] = 0.05
+    action["gripper.pos"] = 0.04
+    robot.send_action(action)
+
+    inference_reference = apply_realman_tcp_relative_pose(
+        np.zeros(6), pika_relative_pose_to_realman_tcp_relative_pose(inference_state[:6])
+    )
+    expected = apply_realman_tcp_relative_pose(
+        inference_reference,
+        pika_relative_pose_to_realman_tcp_relative_pose(np.array([0.05, 0, 0, 0, 0, 0])),
+    )
+    np.testing.assert_allclose(arm.scheduled[-1][0], expected)
     robot.disconnect()
 
 

@@ -47,6 +47,31 @@ class ThreadSafeRobot:
         with self._lock:
             return self._robot.send_action(action)
 
+    def set_action_reference_to_current_pose(self) -> None:
+        """Freeze a robot-specific relative-action origin when supported."""
+        with self._lock:
+            setter = getattr(self._robot, "set_action_reference_to_current_pose", None)
+            if setter is not None:
+                setter()
+
+    def set_action_reference_from_state(self, state: Any) -> None:
+        """Freeze the action origin from the exact state snapshot used for inference."""
+        with self._lock:
+            setter = getattr(self._robot, "set_action_reference_from_state", None)
+            if setter is not None:
+                setter(state)
+                return
+            current_pose_setter = getattr(self._robot, "set_action_reference_to_current_pose", None)
+            if current_pose_setter is not None:
+                current_pose_setter()
+
+    def clear_action_reference(self) -> None:
+        """Clear a robot-specific relative-action origin when supported."""
+        with self._lock:
+            clearer = getattr(self._robot, "clear_action_reference", None)
+            if clearer is not None:
+                clearer()
+
     # -- Read-only proxies (no lock needed) -----------------------------------
 
     @property

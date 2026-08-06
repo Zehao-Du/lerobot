@@ -65,12 +65,16 @@ class RealmanPikaConfig(RobotConfig):
     robot_mode: int = 2
     robot_joint_dim: int = 7
 
-    robot_command_frequency: int = 125
+    robot_command_frequency: int = 200
     robot_command_mode: str = "movep_canfd"
     robot_interpolation_mode: str = "trajectory"
+    robot_canfd_follow: bool = False
+    robot_canfd_trajectory_mode: int = 0
+    robot_canfd_radio: int = 0
     robot_launch_timeout: float = 15.0
     robot_state_read_retries: int = 3
     robot_state_read_retry_delay_sec: float = 0.01
+    robot_max_consecutive_command_failures: int = 10
     robot_max_consecutive_state_read_failures: int = 10
     robot_use_udp_state: bool = True
     robot_udp_port: int = 8888
@@ -119,6 +123,18 @@ class RealmanPikaConfig(RobotConfig):
             raise ValueError(f"robot_port must be > 0, got {self.robot_port}.")
         if self.robot_joint_dim <= 0:
             raise ValueError(f"robot_joint_dim must be > 0, got {self.robot_joint_dim}.")
+        if self.robot_canfd_trajectory_mode not in (0, 1, 2):
+            raise ValueError(
+                "robot_canfd_trajectory_mode must be 0 (passthrough), 1 (curve fitting), "
+                f"or 2 (filtering), got {self.robot_canfd_trajectory_mode}."
+            )
+        if not 0 <= self.robot_canfd_radio <= 1000:
+            raise ValueError(f"robot_canfd_radio must be in [0, 1000], got {self.robot_canfd_radio}.")
+        if self.robot_max_consecutive_command_failures <= 0:
+            raise ValueError(
+                "robot_max_consecutive_command_failures must be > 0, "
+                f"got {self.robot_max_consecutive_command_failures}."
+            )
         if not self.gripper_serial_port:
             raise ValueError("RealmanPikaConfig requires gripper_serial_port.")
         if self.gripper_min_width_m >= self.gripper_max_width_m:

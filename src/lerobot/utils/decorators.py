@@ -23,9 +23,13 @@ def check_if_not_connected(func):
     @wraps(func)
     def wrapper(self, *args, **kwargs):
         if not self.is_connected:
-            raise DeviceNotConnectedError(
-                f"{self.__class__.__name__} is not connected. Run `.connect()` first."
-            )
+            message = f"{self.__class__.__name__} is not connected. Run `.connect()` first."
+            details_getter = getattr(self, "get_connection_error_details", None)
+            if callable(details_getter):
+                details = details_getter()
+                if details:
+                    message = f"{message}\n{details}"
+            raise DeviceNotConnectedError(message)
         return func(self, *args, **kwargs)
 
     return wrapper

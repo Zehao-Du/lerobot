@@ -102,6 +102,7 @@ class RealmanPika(Robot):
         self.gripper: PikaController | None = None
         self._last_state_vector: np.ndarray | None = None
         self._reference_realman_tcp_pose: np.ndarray | None = None
+        self._action_reference_realman_tcp_pose: np.ndarray | None = None
 
     @cached_property
     def _state_features(self) -> dict[str, type]:
@@ -145,8 +146,12 @@ class RealmanPika(Robot):
             joint_dim=self.config.robot_joint_dim,
             command_mode=self.config.robot_command_mode,
             interpolation_mode=self.config.robot_interpolation_mode,
+            canfd_follow=self.config.robot_canfd_follow,
+            canfd_trajectory_mode=self.config.robot_canfd_trajectory_mode,
+            canfd_radio=self.config.robot_canfd_radio,
             state_read_retries=self.config.robot_state_read_retries,
             state_read_retry_delay=self.config.robot_state_read_retry_delay_sec,
+            max_consecutive_command_failures=self.config.robot_max_consecutive_command_failures,
             max_consecutive_state_read_failures=self.config.robot_max_consecutive_state_read_failures,
             use_udp_state=self.config.robot_use_udp_state,
             udp_port=self.config.robot_udp_port,
@@ -181,6 +186,18 @@ class RealmanPika(Robot):
             raise
 
         logger.info("%s connected.", self)
+
+    def get_connection_error_details(self) -> str | None:
+        failures = []
+        for name, controller in (("RealMan arm", self.arm), ("Pika gripper", self.gripper)):
+            if controller is None or controller.is_alive():
+                continue
+            process_error = controller.get_process_error()
+            if process_error:
+                failures.append(f"{name} controller exited:\n{process_error}")
+            else:
+                failures.append(f"{name} controller exited without a reported traceback.")
+        return "\n".join(failures) or None
 
     def configure(self) -> None:
         return None
@@ -234,6 +251,31 @@ class RealmanPika(Robot):
             raise ValueError(f"Missing RealmanPika action keys: {missing}.")
         return np.array([float(action[key]) for key in STATE_ACTION_KEYS], dtype=np.float64)
 
+    @check_if_not_connected
+    def set_action_reference_to_current_pose(self) -> None:
+        """Freeze the current TCP pose as the origin for subsequent relative actions."""
+        self._action_reference_realman_tcp_pose = self._read_realman_tcp_pose().copy()
+
+    @check_if_not_connected
+    def set_action_reference_from_state(self, state: Any) -> None:
+        """Freeze the TCP origin represented by an ``observation.state`` snapshot."""
+        if self._reference_realman_tcp_pose is None:
+            raise RuntimeError("RealmanPika reference TCP pose is not initialized.")
+        state_vector = np.asarray(state, dtype=np.float64).reshape(-1)
+        if state_vector.size != len(STATE_ACTION_KEYS):
+            raise ValueError(
+                f"Expected observation.state with {len(STATE_ACTION_KEYS)} values, "
+                f"got shape {np.asarray(state).shape}."
+            )
+        realman_relative_pose = pika_relative_pose_to_realman_tcp_relative_pose(state_vector[:6])
+        self._action_reference_realman_tcp_pose = apply_realman_tcp_relative_pose(
+            self._reference_realman_tcp_pose, realman_relative_pose
+        )
+
+    def clear_action_reference(self) -> None:
+        """Restore the default behavior where each action is relative to the current TCP pose."""
+        self._action_reference_realman_tcp_pose = None
+
     def _clip_relative_action(self, action: np.ndarray) -> np.ndarray:
         clipped = action.copy()
         clipped[:3] = np.clip(clipped[:3], -self.config.max_relative_pos, self.config.max_relative_pos)
@@ -247,9 +289,14 @@ class RealmanPika(Robot):
             raise RuntimeError("RealmanPika is not connected.")
 
         current_realman_tcp_pose = self._read_realman_tcp_pose()
+        action_reference_pose = (
+            self._action_reference_realman_tcp_pose
+            if self._action_reference_realman_tcp_pose is not None
+            else current_realman_tcp_pose
+        )
         target = self._clip_relative_action(self._action_to_vector(action))
         realman_relative_pose = pika_relative_pose_to_realman_tcp_relative_pose(target[:6])
-        realman_target_pose = apply_realman_tcp_relative_pose(current_realman_tcp_pose, realman_relative_pose)
+        realman_target_pose = apply_realman_tcp_relative_pose(action_reference_pose, realman_relative_pose)
 
         if self.config.table_collision_enabled:
             pika_target_pose = realman_tcp_pose_to_pika_gripper_pose(realman_target_pose)
@@ -262,7 +309,7 @@ class RealmanPika(Robot):
             if lift > 0:
                 realman_target_pose = pika_gripper_pose_to_realman_tcp_pose(pika_target_pose)
                 corrected_realman_relative = realman_tcp_relative_pose_between(
-                    current_realman_tcp_pose, realman_target_pose
+                    action_reference_pose, realman_target_pose
                 )
                 target[:6] = realman_tcp_relative_pose_to_pika_relative_pose(corrected_realman_relative)
                 logger.warning(
@@ -292,6 +339,7 @@ class RealmanPika(Robot):
         self.arm = None
         self.gripper = None
         self._reference_realman_tcp_pose = None
+        self._action_reference_realman_tcp_pose = None
 
     @check_if_not_connected
     def disconnect(self) -> None:

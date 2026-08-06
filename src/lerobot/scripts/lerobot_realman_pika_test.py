@@ -399,6 +399,11 @@ def _make_arg_parser() -> argparse.ArgumentParser:
         default=cfg_defaults.robot_state_read_retry_delay_sec,
     )
     parser.add_argument(
+        "--robot_max_consecutive_command_failures",
+        type=int,
+        default=cfg_defaults.robot_max_consecutive_command_failures,
+    )
+    parser.add_argument(
         "--robot_max_consecutive_state_read_failures",
         type=int,
         default=cfg_defaults.robot_max_consecutive_state_read_failures,
@@ -420,6 +425,18 @@ def _make_arg_parser() -> argparse.ArgumentParser:
         default=cfg_defaults.robot_interpolation_mode,
         choices=("trajectory", "none"),
     )
+    parser.add_argument(
+        "--robot_canfd_follow",
+        action=argparse.BooleanOptionalAction,
+        default=cfg_defaults.robot_canfd_follow,
+    )
+    parser.add_argument(
+        "--robot_canfd_trajectory_mode",
+        type=int,
+        choices=(0, 1, 2),
+        default=cfg_defaults.robot_canfd_trajectory_mode,
+    )
+    parser.add_argument("--robot_canfd_radio", type=int, default=cfg_defaults.robot_canfd_radio)
     parser.add_argument(
         "--max_pos_speed", "--robot.max_pos_speed", dest="max_pos_speed", type=float, default=cfg_defaults.max_pos_speed
     )
@@ -489,8 +506,12 @@ def _make_controllers(args: argparse.Namespace) -> tuple[RealmanInterpolationCon
         joint_dim=args.robot_joint_dim,
         command_mode=args.robot_command_mode,
         interpolation_mode=args.robot_interpolation_mode,
+        canfd_follow=args.robot_canfd_follow,
+        canfd_trajectory_mode=args.robot_canfd_trajectory_mode,
+        canfd_radio=args.robot_canfd_radio,
         state_read_retries=args.robot_state_read_retries,
         state_read_retry_delay=args.robot_state_read_retry_delay,
+        max_consecutive_command_failures=args.robot_max_consecutive_command_failures,
         max_consecutive_state_read_failures=args.robot_max_consecutive_state_read_failures,
         use_udp_state=not args.no_robot_udp_state,
         udp_port=args.robot_udp_port,

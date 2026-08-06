@@ -14,7 +14,7 @@
 
 """Inference engine configs and factory.
 
-Selection is explicit via ``--inference.type=sync|rtc``.  Adding a new
+Selection is explicit via ``--inference.type=sync|rtc|human_in_loop``.  Adding a new
 backend requires registering its config subclass and dispatching it in
 :func:`create_inference_engine`.
 """
@@ -35,6 +35,7 @@ from lerobot.utils.sam3_recolor import Sam3PinkBlockRecolorer
 
 from ..robot_wrapper import ThreadSafeRobot
 from .base import InferenceEngine
+from .human_in_loop import HumanInLoopInferenceEngine
 from .rtc import RTCInferenceEngine
 from .sync import SyncInferenceEngine
 
@@ -62,6 +63,15 @@ class InferenceEngineConfig(draccus.ChoiceRegistry, abc.ABC):
 @dataclass
 class SyncInferenceConfig(InferenceEngineConfig):
     """Inline synchronous inference (one policy call per control tick)."""
+
+
+@InferenceEngineConfig.register_subclass("human_in_loop")
+@dataclass
+class HumanInLoopInferenceConfig(InferenceEngineConfig):
+    """Terminal-controlled chunk inference for human-selected action execution."""
+
+    # Subtracted from every postprocessed gripper-width action before display/control.
+    gripper_width_offset: float = 0.0
 
 
 @InferenceEngineConfig.register_subclass("rtc")
@@ -123,6 +133,20 @@ def create_inference_engine(
             task=task,
             device=device,
             robot_type=robot_wrapper.robot_type,
+            visual_prompt_recolorer=visual_prompt_recolorer,
+        )
+    if isinstance(config, HumanInLoopInferenceConfig):
+        return HumanInLoopInferenceEngine(
+            policy=policy,
+            preprocessor=preprocessor,
+            postprocessor=postprocessor,
+            robot_wrapper=robot_wrapper,
+            ordered_action_keys=ordered_action_keys,
+            task=task,
+            device=device,
+            robot_type=robot_wrapper.robot_type,
+            gripper_width_offset=config.gripper_width_offset,
+            shutdown_event=shutdown_event,
             visual_prompt_recolorer=visual_prompt_recolorer,
         )
     if isinstance(config, RTCInferenceConfig):

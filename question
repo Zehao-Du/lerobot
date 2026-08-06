@@ -1,0 +1,6 @@
+尝试 & 效果
+
+1. sync control, 模型推理 --- 机器人执行 --- 模型推理
+结论：  1. [ visual prompt看起来效果更好 ] visual prompt下模型可以很好的找到小方块，并且拥有失败恢复能力。非visual prompt模式下模型根本找不到小方块
+       2. [ pika gripper+训练数据问题，有没有visual prompt,smolvla都无法完成任务 ] 有没有visual promt,机器人都抓不起来小方块，这是因为gripper width恰好等于小方块边长时夹爪没有对小方块施加力，所以抓不起来。而模型输出gripper width最小也只会等于小方块边长。
+更正：  1. visual prompt并没有更好，只是偶然现象

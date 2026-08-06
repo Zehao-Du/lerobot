@@ -67,6 +67,31 @@ def _check_vector(name: str, value: Any, shape: tuple[int, ...]) -> np.ndarray:
     return value
 
 
+def _put_latest_nowait(state_queue: Any, state: dict[str, Any]) -> bool:
+    """Publish state without allowing a full multiprocessing queue to stop control."""
+    try:
+        state_queue.put_nowait(state)
+        return True
+    except queue.Full:
+        pass
+
+    try:
+        state_queue.get_nowait()
+    except queue.Empty:
+        # multiprocessing.Queue feeder timing can report Full before the oldest
+        # item is available to get_nowait(). Dropping this sample is safe; the
+        # next control cycle will publish another one.
+        return False
+
+    try:
+        state_queue.put_nowait(state)
+        return True
+    except queue.Full:
+        # Another producer/feeder race can refill the queue between get and put.
+        # State is best-effort telemetry, so never terminate control over it.
+        return False
+
+
 def _pop_latest_due_waypoint(
     waypoints: deque[tuple[float, float]], current_time: float
 ) -> float | None:
@@ -122,6 +147,17 @@ class _LatestStateMixin:
             raise RuntimeError(f"{self.__class__.__name__} has not received state yet.")
         return _stack_state_dicts(list(self._state_cache))
 
+    def get_process_error(self) -> str | None:
+        """Return and retain the latest traceback reported by the child process."""
+        latest = getattr(self, "_last_process_error", None)
+        while True:
+            try:
+                latest = self.error_queue.get_nowait()
+            except queue.Empty:
+                break
+        self._last_process_error = latest
+        return latest
+
 
 def _stack_state_dicts(states: list[dict[str, Any]]) -> dict[str, Any]:
     if len(states) == 1:
@@ -152,15 +188,19 @@ class RealmanInterpolationController(mp.Process, _LatestStateMixin):
         robot_port: int,
         level: int = 3,
         mode: int = 2,
-        frequency: int = 125,
+        frequency: int = 200,
         max_pos_speed: float = 0.15,
         max_rot_speed: float = 0.4,
         launch_timeout: float = 15.0,
         joint_dim: int = 7,
         command_mode: str = "movep_canfd",
         interpolation_mode: str = "trajectory",
+        canfd_follow: bool = False,
+        canfd_trajectory_mode: int = 0,
+        canfd_radio: int = 0,
         state_read_retries: int = 3,
         state_read_retry_delay: float = 0.01,
+        max_consecutive_command_failures: int = 10,
         max_consecutive_state_read_failures: int = 10,
         use_udp_state: bool = True,
         udp_port: int = 8888,
@@ -188,6 +228,14 @@ class RealmanInterpolationController(mp.Process, _LatestStateMixin):
             raise ValueError(f"Unsupported command_mode: {command_mode!r}.")
         if interpolation_mode not in ("trajectory", "none"):
             raise ValueError(f"Unsupported interpolation_mode: {interpolation_mode!r}.")
+        if canfd_trajectory_mode not in (0, 1, 2):
+            raise ValueError(f"Unsupported CANFD trajectory mode: {canfd_trajectory_mode}.")
+        if not 0 <= canfd_radio <= 1000:
+            raise ValueError(f"CANFD radio must be in [0, 1000], got {canfd_radio}.")
+        if max_consecutive_command_failures <= 0:
+            raise ValueError(
+                f"max_consecutive_command_failures must be > 0, got {max_consecutive_command_failures}."
+            )
         if use_udp_state and udp_target_ip is None:
             udp_target_ip = _infer_local_ip_for_target(robot_ip)
 
@@ -203,8 +251,12 @@ class RealmanInterpolationController(mp.Process, _LatestStateMixin):
         self.joint_dim = joint_dim
         self.command_mode = command_mode
         self.interpolation_mode = interpolation_mode
+        self.canfd_follow = canfd_follow
+        self.canfd_trajectory_mode = canfd_trajectory_mode
+        self.canfd_radio = canfd_radio
         self.state_read_retries = state_read_retries
         self.state_read_retry_delay = state_read_retry_delay
+        self.max_consecutive_command_failures = max_consecutive_command_failures
         self.max_consecutive_state_read_failures = max_consecutive_state_read_failures
         self.use_udp_state = use_udp_state
         self.udp_port = udp_port
@@ -386,7 +438,12 @@ class RealmanInterpolationController(mp.Process, _LatestStateMixin):
     def _send_pose_command(self, robot, pose: np.ndarray) -> int:
         pose_list = np.asarray(pose, dtype=np.float64).tolist()
         if self.command_mode == "movep_canfd":
-            return robot.rm_movep_canfd(pose_list, follow=True, trajectory_mode=0, radio=0)
+            return robot.rm_movep_canfd(
+                pose_list,
+                follow=self.canfd_follow,
+                trajectory_mode=self.canfd_trajectory_mode,
+                radio=self.canfd_radio,
+            )
         if self.command_mode == "movep_follow":
             return robot.rm_movep_follow(pose_list)
         if self.command_mode == "movej_p":
@@ -421,14 +478,7 @@ class RealmanInterpolationController(mp.Process, _LatestStateMixin):
             "robot_receive_timestamp": timestamp,
             "robot_timestamp": timestamp,
         }
-        try:
-            self.state_queue.put_nowait(state)
-        except queue.Full:
-            try:
-                self.state_queue.get_nowait()
-            except queue.Empty:
-                pass
-            self.state_queue.put_nowait(state)
+        _put_latest_nowait(self.state_queue, state)
 
     def run(self) -> None:
         if hasattr(os, "sched_setscheduler"):
@@ -439,6 +489,9 @@ class RealmanInterpolationController(mp.Process, _LatestStateMixin):
                 self._import_realman_sdk()
             )
             robot = self._connect_robot(RoboticArm, rm_thread_mode_e)
+            clear_error_ret = robot.rm_clear_system_err()
+            if clear_error_ret != 0:
+                logger.warning("RealMan rm_clear_system_err returned error code %s.", clear_error_ret)
             if self.use_udp_state:
                 self._setup_udp_state(robot, rm_realtime_arm_joint_state_t, rm_realtime_push_config_t)
 
@@ -457,6 +510,7 @@ class RealmanInterpolationController(mp.Process, _LatestStateMixin):
             iter_idx = 0
             t_start = time.monotonic()
             keep_running = True
+            consecutive_command_failures = 0
 
             while keep_running:
                 t_now = time.monotonic()
@@ -470,7 +524,20 @@ class RealmanInterpolationController(mp.Process, _LatestStateMixin):
                     command_pose = rotvec_pose_to_realman_euler_pose(command_pose_interp)
                 ret = self._send_pose_command(robot, command_pose)
                 if ret != 0:
-                    raise RuntimeError(f"RealMan pose command failed with error code: {ret}.")
+                    consecutive_command_failures += 1
+                    logger.warning(
+                        "RealMan pose command failed with error code %s (%d/%d); continuing.",
+                        ret,
+                        consecutive_command_failures,
+                        self.max_consecutive_command_failures,
+                    )
+                    if consecutive_command_failures >= self.max_consecutive_command_failures:
+                        raise RuntimeError(
+                            "RealMan pose command failed "
+                            f"{consecutive_command_failures} consecutive times, last error code: {ret}."
+                        )
+                else:
+                    consecutive_command_failures = 0
 
                 recv_time = time.time()
                 try:
@@ -707,14 +774,7 @@ class PikaController(mp.Process, _LatestStateMixin):
             "gripper_receive_timestamp": receive_time,
             "gripper_timestamp": receive_time - self.receive_latency,
         }
-        try:
-            self.state_queue.put_nowait(state)
-        except queue.Full:
-            try:
-                self.state_queue.get_nowait()
-            except queue.Empty:
-                pass
-            self.state_queue.put_nowait(state)
+        _put_latest_nowait(self.state_queue, state)
 
     def run(self) -> None:
         gripper = None

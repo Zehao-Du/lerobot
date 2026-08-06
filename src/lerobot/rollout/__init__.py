@@ -40,6 +40,8 @@ from .context import (
     build_rollout_context,
 )
 from .inference import (
+    HumanInLoopInferenceConfig,
+    HumanInLoopInferenceEngine,
     InferenceEngine,
     InferenceEngineConfig,
     RTCInferenceConfig,
@@ -76,6 +78,8 @@ __all__ = [
     "EpisodicStrategyConfig",
     "InferenceEngine",
     "InferenceEngineConfig",
+    "HumanInLoopInferenceConfig",
+    "HumanInLoopInferenceEngine",
     "PolicyContext",
     "ProcessorContext",
     "RTCInferenceConfig",

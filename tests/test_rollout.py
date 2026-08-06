@@ -92,9 +92,12 @@ def test_dagger_config_defaults():
 
 
 def test_inference_config_types():
-    from lerobot.rollout import RTCInferenceConfig, SyncInferenceConfig
+    from lerobot.rollout import HumanInLoopInferenceConfig, RTCInferenceConfig, SyncInferenceConfig
 
     assert SyncInferenceConfig().type == "sync"
+    human_in_loop = HumanInLoopInferenceConfig()
+    assert human_in_loop.type == "human_in_loop"
+    assert human_in_loop.gripper_width_offset == 0.0
 
     rtc = RTCInferenceConfig()
     assert rtc.type == "rtc"
@@ -363,6 +366,52 @@ def test_create_inference_engine_sync():
         device="cpu",
     )
     assert isinstance(engine, SyncInferenceEngine)
+
+
+def test_human_in_loop_engine_reuses_chunk_until_next(monkeypatch, capsys):
+    from lerobot.rollout import HumanInLoopInferenceEngine
+
+    class Policy:
+        config = SimpleNamespace(use_amp=False)
+
+        def __init__(self):
+            self.calls = 0
+
+        def predict_action_chunk(self, observation):
+            self.calls += 1
+            return torch.tensor([[[1.0, 2.0], [3.0, 4.0]]])
+
+        def reset(self):
+            pass
+
+    policy = Policy()
+    robot = MagicMock()
+    engine = HumanInLoopInferenceEngine(
+        policy=policy,
+        preprocessor=MagicMock(side_effect=lambda value: value),
+        postprocessor=MagicMock(side_effect=lambda value: value),
+        robot_wrapper=robot,
+        ordered_action_keys=["x.pos", "gripper.pos"],
+        task="pick",
+        device="cpu",
+        robot_type="mock",
+        gripper_width_offset=0.5,
+        shutdown_event=Event(),
+    )
+    responses = iter(["offset 0.25", "1", "offset=1.0", "1", "next", "0"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(responses))
+
+    zero_obs = {"observation.state": torch.zeros(2).numpy()}
+    one_obs = {"observation.state": torch.ones(2).numpy()}
+    assert torch.equal(engine.get_action(zero_obs), torch.tensor([3.0, 3.75]))
+    assert torch.equal(engine.get_action(zero_obs), torch.tensor([3.0, 3.0]))
+    assert engine.get_action(zero_obs) is None
+    assert torch.equal(engine.get_action(one_obs), torch.tensor([1.0, 1.0]))
+    assert policy.calls == 2
+    assert robot.set_action_reference_from_state.call_count == 2
+    assert robot.set_action_reference_to_current_pose.call_count == 0
+    assert robot.clear_action_reference.call_count == 1
+    assert "Gripper width offset updated to 0.250000 m" in capsys.readouterr().out
 
 
 def test_create_rtc_engine_resolves_gripper_lookahead_channel():
