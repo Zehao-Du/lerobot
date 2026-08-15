@@ -112,6 +112,23 @@ def test_feature_schema_and_order(monkeypatch, tmp_path):
     assert robot.observation_features["fisheye"] == (480, 640, 3)
 
 
+def test_observation_exposes_absolute_realman_tcp_pose(monkeypatch, tmp_path):
+    _patch_fakes(monkeypatch)
+    robot = RealmanPika(RealmanPikaConfig(calibration_dir=tmp_path))
+    robot.connect()
+    arm = FakeArm.instances[-1]
+    gripper = FakeGripper.instances[-1]
+    arm.pose = np.array([0.42, -0.18, 0.31, 0.1, -0.2, 0.3])
+    gripper.position = 0.04
+
+    observation = robot.get_observation()
+
+    state = np.array([observation[key] for key in STATE_ACTION_KEYS])
+    np.testing.assert_array_equal(state[:6], arm.pose)
+    assert state[6] == gripper.position
+    robot.disconnect()
+
+
 def test_realman_pika_pose_roundtrip():
     pose = np.array([0.32, -0.11, 0.25, 0.21, -0.17, 0.33], dtype=np.float64)
     pika_pose = realman_tcp_pose_to_pika_gripper_pose(pose)
@@ -227,6 +244,7 @@ def test_send_action_clips_and_schedules(monkeypatch, tmp_path):
     )
     robot = RealmanPika(cfg)
     robot.connect()
+    robot.set_action_reference_to_current_pose()
 
     current = robot._read_state_vector()
     np.testing.assert_allclose(current[:6], np.zeros(6), atol=1e-8)
@@ -286,13 +304,35 @@ def test_frozen_action_reference_is_shared_until_cleared(monkeypatch, tmp_path):
     )
     np.testing.assert_allclose(arm.scheduled[-1][0], expected_from_frozen_reference)
 
-    # Clearing restores the normal cumulative/current-relative behavior.
+    # Clearing prevents another relative action until a new reference is set.
     robot.clear_action_reference()
-    robot.send_action(first)
-    expected_from_current = apply_realman_tcp_relative_pose(
-        arm.pose, pika_relative_pose_to_realman_tcp_relative_pose(np.array([0.1, 0, 0, 0, 0, 0]))
+    with pytest.raises(RuntimeError, match="Action reference is not set"):
+        robot.send_action(first)
+    robot.disconnect()
+
+
+def test_action_reference_accepts_absolute_realman_tcp_pose(monkeypatch, tmp_path):
+    _patch_fakes(monkeypatch)
+    robot = RealmanPika(RealmanPikaConfig(calibration_dir=tmp_path))
+    robot.connect()
+
+    tcp_pose = np.array([0.42, -0.18, 0.31, 0.1, -0.2, 0.3])
+    robot.set_action_reference_from_realman_tcp_pose(tcp_pose)
+    np.testing.assert_array_equal(robot._action_reference_realman_tcp_pose, tcp_pose)
+
+    # The robot owns its reference; mutating the caller's array must not change it.
+    tcp_pose[:] = 0.0
+    np.testing.assert_array_equal(
+        robot._action_reference_realman_tcp_pose,
+        np.array([0.42, -0.18, 0.31, 0.1, -0.2, 0.3]),
     )
-    np.testing.assert_allclose(arm.scheduled[-1][0], expected_from_current)
+
+    with pytest.raises(TypeError, match="numpy.ndarray"):
+        robot.set_action_reference_from_realman_tcp_pose([0.0] * 6)
+    with pytest.raises(ValueError, match=r"state shape \(6,\)"):
+        robot.set_action_reference_from_realman_tcp_pose(np.zeros((1, 6)))
+    with pytest.raises(ValueError, match="finite values"):
+        robot.set_action_reference_from_realman_tcp_pose(np.array([0.0, 0.0, 0.0, 0.0, 0.0, np.nan]))
     robot.disconnect()
 
 
@@ -335,6 +375,7 @@ def test_send_action_lifts_gripper_target_above_table(monkeypatch, tmp_path):
     )
     robot = RealmanPika(cfg)
     robot.connect()
+    robot.set_action_reference_to_current_pose()
 
     action = dict.fromkeys(STATE_ACTION_KEYS, 0.0)
     action["gripper.pos"] = 0.04

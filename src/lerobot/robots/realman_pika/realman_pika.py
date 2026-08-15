@@ -218,15 +218,9 @@ class RealmanPika(Robot):
         return _as_latest_float(gripper_state["gripper_position"])
 
     def _read_state_vector(self) -> np.ndarray:
-        if self._reference_realman_tcp_pose is None:
-            raise RuntimeError("RealmanPika reference TCP pose is not initialized.")
         realman_tcp_pose = self._read_realman_tcp_pose()
-        realman_relative_pose = realman_tcp_relative_pose_between(
-            self._reference_realman_tcp_pose, realman_tcp_pose
-        )
-        pika_relative_pose = realman_tcp_relative_pose_to_pika_relative_pose(realman_relative_pose)
         gripper_width = self._read_gripper_width()
-        state = np.concatenate([pika_relative_pose, np.array([gripper_width], dtype=np.float64)])
+        state = np.concatenate([realman_tcp_pose, np.array([gripper_width], dtype=np.float64)])
         self._last_state_vector = state
         return state
 
@@ -257,10 +251,25 @@ class RealmanPika(Robot):
         self._action_reference_realman_tcp_pose = self._read_realman_tcp_pose().copy()
 
     @check_if_not_connected
+    def set_action_reference_from_realman_tcp_pose(self, state: np.ndarray) -> None:
+        """Use an absolute RealMan TCP pose as the origin for subsequent relative actions."""
+        if not isinstance(state, np.ndarray):
+            raise TypeError(f"Expected state to be a numpy.ndarray, got {type(state).__name__}.")
+        if state.shape != (6,):
+            raise ValueError(f"Expected state shape (6,), got {state.shape}.")
+        if not np.issubdtype(state.dtype, np.number):
+            raise TypeError(f"Expected state to have a numeric dtype, got {state.dtype}.")
+        if not np.isfinite(state).all():
+            raise ValueError("Expected state to contain only finite values.")
+        self._action_reference_realman_tcp_pose = state.astype(np.float64, copy=True)
+
+    @check_if_not_connected
     def set_action_reference_from_state(self, state: Any) -> None:
         """Freeze the TCP origin represented by an ``observation.state`` snapshot."""
+        # Raise error when the robot is not connected successfully
         if self._reference_realman_tcp_pose is None:
             raise RuntimeError("RealmanPika reference TCP pose is not initialized.")
+
         state_vector = np.asarray(state, dtype=np.float64).reshape(-1)
         if state_vector.size != len(STATE_ACTION_KEYS):
             raise ValueError(
@@ -273,7 +282,7 @@ class RealmanPika(Robot):
         )
 
     def clear_action_reference(self) -> None:
-        """Restore the default behavior where each action is relative to the current TCP pose."""
+        """Clear the TCP origin required by subsequent relative actions."""
         self._action_reference_realman_tcp_pose = None
 
     def _clip_relative_action(self, action: np.ndarray) -> np.ndarray:
@@ -288,12 +297,11 @@ class RealmanPika(Robot):
         if self.arm is None or self.gripper is None:
             raise RuntimeError("RealmanPika is not connected.")
 
-        current_realman_tcp_pose = self._read_realman_tcp_pose()
-        action_reference_pose = (
-            self._action_reference_realman_tcp_pose
-            if self._action_reference_realman_tcp_pose is not None
-            else current_realman_tcp_pose
-        )
+        action_reference_pose = self._action_reference_realman_tcp_pose
+        if action_reference_pose is None:
+            raise RuntimeError(
+                "Action reference is not set. Set a RealMan TCP reference before sending actions."
+            )
         target = self._clip_relative_action(self._action_to_vector(action))
         realman_relative_pose = pika_relative_pose_to_realman_tcp_relative_pose(target[:6])
         realman_target_pose = apply_realman_tcp_relative_pose(action_reference_pose, realman_relative_pose)
