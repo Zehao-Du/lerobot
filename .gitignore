@@ -86,6 +86,7 @@ pip-log.txt
 pip-delete-this-directory.txt
 celerybeat-schedule
 celerybeat.pid
+LOGS/
 
 ### IDE & Editor Config ###
 # VS Code
@@ -165,6 +166,7 @@ wandb/
 # Data folders
 data/
 outputs/
+datasets/
 
 # Translations
 *.mo
